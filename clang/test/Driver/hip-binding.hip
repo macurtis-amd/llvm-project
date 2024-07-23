@@ -97,3 +97,8 @@
 // LTO-NO-RDC-NEXT: # "amdgcn-amd-amdhsa" - "clang", inputs: ["[[INPUT]]"], output: "[[LTO_90A:.+]]"
 // LTO-NO-RDC-NEXT: # "amdgcn-amd-amdhsa" - "AMDGCN::Linker", inputs: ["[[LTO_90A]]"], output: "[[OBJ_90A:.+]]"
 // LTO-NO-RDC-NEXT: # "amdgcn-amd-amdhsa" - "AMDGCN::Linker", inputs: ["[[OBJ_908]]", "[[OBJ_90A]]"], output: "[[HIPFB:.+]]"
+
+// LTO-mode should also be the default for gfx90*
+// RUN: %clang -### --target=x86_64-linux-gnu -fno-gpu-rdc --offload-new-driver -ccc-print-bindings \
+// RUN:        -nogpulib -nogpuinc --offload-arch=gfx90a --offload-arch=gfx908 -c %s 2>&1 \
+// RUN: | FileCheck -check-prefix=LTO-NO-RDC %s

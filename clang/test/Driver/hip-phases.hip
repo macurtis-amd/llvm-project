@@ -10,7 +10,7 @@
 // RUN: --no-offload-new-driver --cuda-gpu-arch=gfx803 %s 2>&1 \
 // RUN: | FileCheck -check-prefixes=BIN,NRD,OLD %s
 // RUN: %clang -x hip --target=x86_64-unknown-linux-gnu -ccc-print-phases \
-// RUN: --offload-new-driver --cuda-gpu-arch=gfx803 %s 2>&1 \
+// RUN: --offload-new-driver -fno-offload-lto --cuda-gpu-arch=gfx803 %s 2>&1 \
 // RUN: | FileCheck -check-prefixes=BIN,NRD,NEW %s
 //
 // RUN: %clang -x hip --target=x86_64-unknown-linux-gnu -ccc-print-phases \
@@ -646,11 +646,17 @@
 // LTO-NEXT: 15: backend, {14}, assembler, (host-hip)
 // LTO-NEXT: 16: assembler, {15}, object, (host-hip)
 
+// LTO-mode should also be the default for gfx90a
+// RUN: %clang -### --target=x86_64-linux-gnu --offload-new-driver -ccc-print-phases \
+// RUN:        --offload-arch=gfx90a --offload-arch=gfx908 -fgpu-rdc -c %s 2>&1 \
+// RUN: | FileCheck -check-prefix=LTO %s
+
 //
 // Test the new driver when not bundling
 //
 // RUN: %clang -### --target=x86_64-linux-gnu --offload-new-driver -ccc-print-phases \
-// RUN:        --offload-device-only --offload-arch=gfx90a -emit-llvm -c %s 2>&1 \
+// RUN:        --offload-device-only --offload-arch=gfx90a -fno-offload-lto \
+// RUN:        -emit-llvm -c %s 2>&1 \
 // RUN: | FileCheck -check-prefix=DEVICE-ONLY %s
 //      DEVICE-ONLY: 0: input, "[[INPUT:.+]]", hip, (device-hip, gfx90a)
 // DEVICE-ONLY-NEXT: 1: preprocessor, {0}, hip-cpp-output, (device-hip, gfx90a)

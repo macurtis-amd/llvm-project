@@ -721,24 +721,62 @@ static driver::LTOKind parseLTOMode(Driver &D, const llvm::opt::ArgList &Args,
   return LTOMode;
 }
 
+inline bool useNewOffloadingDriver(Compilation &C,
+                                         const llvm::opt::ArgList &Args) {
+  return C.isOffloadingHostKind(Action::OFK_OpenMP) ||
+      Args.hasFlag(options::OPT_offload_new_driver,
+                   options::OPT_no_offload_new_driver, false);
+}
+
+inline LTOKind getDefaultOffloadLTOKind(Compilation &C)
+{
+    // For now, arch-dependent opt-in for LTO
+    for (auto &[Kind, TC] : C.getAllOffloadToolChains()) {
+      if (Kind == Action::OFK_None || Kind == Action::OFK_Host)
+        continue;
+      if (TC->getArch() != llvm::Triple::amdgcn)
+        return LTOK_None;
+    }
+
+    return LTOK_Full;
+}
+
 // Parse the LTO options.
 void Driver::setLTOMode(const llvm::opt::ArgList &Args) {
   LTOMode =
       parseLTOMode(*this, Args, options::OPT_flto_EQ, options::OPT_fno_lto);
+}
+
+void Driver::setOffloadLTOMode(Compilation &C) {
+  const llvm::opt::ArgList &Args = C.getArgs();
 
   OffloadLTOMode = parseLTOMode(*this, Args, options::OPT_foffload_lto_EQ,
                                 options::OPT_fno_offload_lto);
 
+  Arg *OffloadLTOArg = Args.getLastArg(options::OPT_foffload_lto_EQ,
+                                       options::OPT_fno_offload_lto);
+
   // Try to enable `-foffload-lto=full` if `-fopenmp-target-jit` is on.
   if (Args.hasFlag(options::OPT_fopenmp_target_jit,
                    options::OPT_fno_openmp_target_jit, false)) {
-    if (Arg *A = Args.getLastArg(options::OPT_foffload_lto_EQ,
-                                 options::OPT_fno_offload_lto))
-      if (OffloadLTOMode != LTOK_Full)
-        Diag(diag::err_drv_incompatible_options)
-            << A->getSpelling() << "-fopenmp-target-jit";
+    if (OffloadLTOArg && OffloadLTOMode != LTOK_Full)
+      Diag(diag::err_drv_incompatible_options)
+          << OffloadLTOArg->getSpelling() << "-fopenmp-target-jit";
     OffloadLTOMode = LTOK_Full;
   }
+
+  if (!OffloadLTOArg && OffloadLTOMode.value() == LTOK_None &&
+      useNewOffloadingDriver(C, Args)) {
+    // No offload lto set and using the new driver
+    OffloadLTOMode = getDefaultOffloadLTOKind(C);
+  }
+}
+
+LTOKind Driver::getOffloadLTOMode() const {
+  assert(OffloadLTOMode.has_value()
+         && "Requesting OffloadLTOMode before it has been set");
+
+  return OffloadLTOMode.value();
 }
 
 /// Compute the desired OpenMP runtime from the flags provided.
@@ -1527,6 +1565,7 @@ Compilation *Driver::BuildCompilation(ArrayRef<const char *> ArgList) {
 
   // Populate the tool chains for the offloading devices, if any.
   CreateOffloadingDeviceToolChains(*C, Inputs);
+  setOffloadLTOMode(*C);
 
   // Construct the list of abstract actions to perform for this compilation. On
   // MachO targets this uses the driver-driver and universal actions.
@@ -4150,16 +4189,11 @@ void Driver::BuildActions(Compilation &C, DerivedArgList &Args,
 
   handleArguments(C, Args, Inputs, Actions);
 
-  bool UseNewOffloadingDriver =
-      C.isOffloadingHostKind(Action::OFK_OpenMP) ||
-      Args.hasFlag(options::OPT_offload_new_driver,
-                   options::OPT_no_offload_new_driver, false);
-
   // Builder to be used to build offloading actions.
   std::unique_ptr<OffloadingActionBuilder> OffloadBuilder =
-      !UseNewOffloadingDriver
-          ? std::make_unique<OffloadingActionBuilder>(C, Args, Inputs)
-          : nullptr;
+      useNewOffloadingDriver(C, Args)
+          ? nullptr
+          : std::make_unique<OffloadingActionBuilder>(C, Args, Inputs);
 
   // Construct the actions to perform.
   ExtractAPIJobAction *ExtractAPIAction = nullptr;
@@ -4181,14 +4215,14 @@ void Driver::BuildActions(Compilation &C, DerivedArgList &Args,
 
     // Use the current host action in any of the offloading actions, if
     // required.
-    if (!UseNewOffloadingDriver)
+    if (OffloadBuilder)
       if (OffloadBuilder->addHostDependenceToDeviceActions(Current, InputArg))
         break;
 
     for (phases::ID Phase : PL) {
 
       // Add any offload action the host action depends on.
-      if (!UseNewOffloadingDriver)
+      if (OffloadBuilder)
         Current = OffloadBuilder->addDeviceDependencesToHostAction(
             Current, InputArg, Phase, PL.back(), FullPL);
       if (!Current)
@@ -4241,7 +4275,7 @@ void Driver::BuildActions(Compilation &C, DerivedArgList &Args,
 
       // Try to build the offloading actions and add the result as a dependency
       // to the host.
-      if (UseNewOffloadingDriver)
+      if (!OffloadBuilder)
         Current = BuildOffloadingActions(C, Args, I, Current);
       // Use the current host action in any of the offloading actions, if
       // required.
@@ -4258,7 +4292,7 @@ void Driver::BuildActions(Compilation &C, DerivedArgList &Args,
       Actions.push_back(Current);
 
     // Add any top level actions generated for offloading.
-    if (!UseNewOffloadingDriver)
+    if (OffloadBuilder)
       OffloadBuilder->appendTopLevelActions(Actions, Current, InputArg);
     else if (Current)
       Current->propagateHostOffloadInfo(C.getActiveOffloadKinds(),
@@ -4270,19 +4304,19 @@ void Driver::BuildActions(Compilation &C, DerivedArgList &Args,
   if (LinkerInputs.empty()) {
     Arg *FinalPhaseArg;
     if (getFinalPhase(Args, &FinalPhaseArg) == phases::Link)
-      if (!UseNewOffloadingDriver)
+      if (OffloadBuilder)
         OffloadBuilder->appendDeviceLinkActions(Actions);
   }
 
   if (!LinkerInputs.empty()) {
-    if (!UseNewOffloadingDriver)
+    if (OffloadBuilder)
       if (Action *Wrapper = OffloadBuilder->makeHostLinkAction())
         LinkerInputs.push_back(Wrapper);
     Action *LA;
     // Check if this Linker Job should emit a static library.
     if (ShouldEmitStaticLibrary(Args)) {
       LA = C.MakeAction<StaticLibJobAction>(LinkerInputs, types::TY_Image);
-    } else if (UseNewOffloadingDriver ||
+    } else if (!OffloadBuilder ||
                Args.hasArg(options::OPT_offload_link)) {
       LA = C.MakeAction<LinkerWrapperJobAction>(LinkerInputs, types::TY_Image);
       LA->propagateHostOffloadInfo(C.getActiveOffloadKinds(),
@@ -4290,7 +4324,7 @@ void Driver::BuildActions(Compilation &C, DerivedArgList &Args,
     } else {
       LA = C.MakeAction<LinkJobAction>(LinkerInputs, types::TY_Image);
     }
-    if (!UseNewOffloadingDriver)
+    if (OffloadBuilder)
       LA = OffloadBuilder->processHostLinkAction(LA);
     Actions.push_back(LA);
   }

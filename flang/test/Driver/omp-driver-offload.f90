@@ -51,9 +51,9 @@
 ! RUN: %flang -### -fopenmp --offload-arch=gfx90a -fopenmp-targets=amdgcn-amd-amdhsa %s 2>&1 | FileCheck --check-prefixes=CHECK-OPENMP-IS-TARGET-DEVICE %s
 ! CHECK-OPENMP-IS-TARGET-DEVICE: "{{[^"]*}}flang-new" "-fc1" {{.*}} "-fopenmp" {{.*}} "-fopenmp-is-target-device" {{.*}}.f90"
 
-! Testing appropriate flags are gnerated and appropriately assigned by the driver when offloading
+! Testing appropriate flags are generated and appropriately assigned by the driver when offloading
 ! RUN: %flang -S -### %s -o %t 2>&1 \
-! RUN: -fopenmp --offload-arch=gfx90a \
+! RUN: -fopenmp --offload-arch=gfx90a -fno-offload-lto \
 ! RUN: --target=aarch64-unknown-linux-gnu \
 ! RUN:   | FileCheck %s --check-prefix=OPENMP-OFFLOAD-ARGS
 ! OPENMP-OFFLOAD-ARGS: "{{[^"]*}}flang-new" "-fc1" "-triple" "aarch64-unknown-linux-gnu" {{.*}} "-fopenmp" {{.*}}.f90"
@@ -66,6 +66,26 @@
 ! OPENMP-OFFLOAD-ARGS-SAME:  "-fopenmp"
 ! OPENMP-OFFLOAD-ARGS-SAME:  "-fembed-offload-object={{.*}}.out" {{.*}}.bc"
 
+! Test that offloaded amdgcn defaults to full lto
+! RUN: %flang -S -### %s -o %t 2>&1 \
+! RUN: -fopenmp --offload-arch=gfx90a -foffload-lto \
+! RUN: --target=aarch64-unknown-linux-gnu \
+! RUN:   | FileCheck %s --check-prefix=OPENMP-OFFLOAD-LTO
+! RUN: %flang -S -### %s -o %t 2>&1 \
+! RUN: -fopenmp --offload-arch=gfx90a \
+! RUN: --target=aarch64-unknown-linux-gnu \
+! RUN:   | FileCheck %s --check-prefix=OPENMP-OFFLOAD-LTO
+! OPENMP-OFFLOAD-LTO: "{{[^"]*}}flang-new" "-fc1" "-triple" "aarch64-unknown-linux-gnu" {{.*}} "-fopenmp" {{.*}}.f90"
+! OPENMP-OFFLOAD-LTO-NEXT: "{{[^"]*}}flang-new" "-fc1" "-triple" "amdgcn-amd-amdhsa"
+! OPENMP-OFFLOAD-LTO-SAME:  "-emit-llvm"
+! OPENMP-OFFLOAD-LTO-SAME:  "-fopenmp"
+! OPENMP-OFFLOAD-LTO-SAME:  "-fopenmp-host-ir-file-path" "{{.*}}.bc" "-fopenmp-is-target-device"
+! OPENMP-OFFLOAD-LTO-SAME:  {{.*}}.f90"
+! OPENMP-OFFLOAD-LTO: "{{[^"]*}}clang-offload-packager{{.*}}" {{.*}} "--image=file={{.*}}.s,triple=amdgcn-amd-amdhsa,arch=gfx90a,kind=openmp"
+! OPENMP-OFFLOAD-LTO-NEXT: "{{[^"]*}}flang-new" "-fc1" "-triple" "aarch64-unknown-linux-gnu"
+! OPENMP-OFFLOAD-LTO-SAME:  "-fopenmp"
+! OPENMP-OFFLOAD-LTO-SAME:  "-fembed-offload-object={{.*}}.out" {{.*}}.bc"
+  
 ! Test -fopenmp with offload for RTL Flag Options
 ! RUN: %flang -### %s -o %t 2>&1 \
 ! RUN: -fopenmp --offload-arch=gfx90a \

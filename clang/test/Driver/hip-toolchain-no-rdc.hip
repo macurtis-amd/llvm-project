@@ -24,7 +24,8 @@
 // RUN:   --hip-device-lib=lib1.bc --hip-device-lib=lib2.bc \
 // RUN:   --hip-device-lib-path=%S/Inputs/hip_multiple_inputs/lib1 \
 // RUN:   --hip-device-lib-path=%S/Inputs/hip_multiple_inputs/lib2 \
-// RUN:   -fuse-ld=lld -B%S/Inputs/lld -nogpuinc --offload-new-driver -c \
+// RUN:   -fuse-ld=lld -B%S/Inputs/lld -nogpuinc --offload-new-driver \
+// RUN:   -fno-offload-lto -c \
 // RUN:   %S/Inputs/hip_multiple_inputs/a.cu \
 // RUN:   %S/Inputs/hip_multiple_inputs/b.hip \
 // RUN: 2>&1 | FileCheck -check-prefixes=CHECK %s

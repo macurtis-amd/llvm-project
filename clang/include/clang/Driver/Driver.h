@@ -32,6 +32,7 @@
 #include <set>
 #include <string>
 #include <vector>
+#include <optional>
 
 namespace llvm {
 class Triple;
@@ -117,7 +118,8 @@ class Driver {
   LTOKind LTOMode;
 
   /// LTO mode selected via -f(no-offload-)?lto(=.*)? options.
-  LTOKind OffloadLTOMode;
+  /// 'optional' to ensure that it is set before used.
+  std::optional<LTOKind> OffloadLTOMode;
 
 public:
   enum OpenMPRuntimeKind {
@@ -729,9 +731,7 @@ public:
   }
 
   /// Get the specific kind of LTO being performed.
-  LTOKind getOffloadLTOMode() const {
-    return OffloadLTOMode;
-  }
+  LTOKind getOffloadLTOMode() const;
 
 private:
 
@@ -760,6 +760,7 @@ private:
   /// Parse the \p Args list for LTO options and record the type of LTO
   /// compilation based on which -f(no-)?lto(=.*)? option occurs last.
   void setLTOMode(const llvm::opt::ArgList &Args);
+  void setOffloadLTOMode(Compilation &C);
 
   /// Retrieves a ToolChain for a particular \p Target triple.
   ///

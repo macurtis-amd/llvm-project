@@ -13,6 +13,7 @@
 #include "clang/Driver/Action.h"
 #include "clang/Driver/Job.h"
 #include "clang/Driver/Util.h"
+#include "llvm/ADT/iterator_range.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringRef.h"
@@ -164,6 +165,12 @@ public:
   const_offload_toolchains_range
   getOffloadToolChains(Action::OffloadKind Kind) const {
     return OrderedOffloadingToolchains.equal_range(Kind);
+  }
+
+  llvm::iterator_range<const_offload_toolchains_iterator>
+  getAllOffloadToolChains() const {
+    return llvm::make_range(OrderedOffloadingToolchains.begin(),
+                            OrderedOffloadingToolchains.end());
   }
 
   /// Return true if an offloading tool chain of a given kind exists.
