@@ -715,13 +715,22 @@ public:
   ModuleHeaderMode getModuleHeaderMode() const { return CXX20HeaderType; }
 
   /// Returns true if we are performing any kind of LTO.
-  bool isUsingLTO(bool IsOffload = false) const {
-    return getLTOMode(IsOffload) != LTOK_None;
+  bool isUsingLTO() const {
+    return getLTOMode() != LTOK_None;
   }
 
   /// Get the specific kind of LTO being performed.
-  LTOKind getLTOMode(bool IsOffload = false) const {
-    return IsOffload ? OffloadLTOMode : LTOMode;
+  LTOKind getLTOMode() const {
+    return LTOMode;
+  }
+
+  bool isUsingOffloadLTO() const {
+    return getOffloadLTOMode() != LTOK_None;
+  }
+
+  /// Get the specific kind of LTO being performed.
+  LTOKind getOffloadLTOMode() const {
+    return OffloadLTOMode;
   }
 
 private:
