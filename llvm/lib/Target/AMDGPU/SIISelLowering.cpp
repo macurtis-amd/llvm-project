@@ -13874,6 +13874,9 @@ static bool addresses16Bits(int Mask) {
   int Low8 = Mask & 0xff;
   int Hi8 = (Mask & 0xff00) >> 8;
 
+  if (Hi8 == 0x0c || Low8 == 0x0c)
+    return false;
+
   assert(Low8 < 8 && Hi8 < 8);
   // Are the bytes contiguous in the order of increasing addresses.
   bool IsConsecutive = (Hi8 - Low8 == 1);
@@ -13968,8 +13971,10 @@ static SDValue getDWordFromOffset(SelectionDAG &DAG, SDLoc SL, SDValue Src,
 
 static SDValue matchPERM(SDNode *N, TargetLowering::DAGCombinerInfo &DCI) {
   SelectionDAG &DAG = DCI.DAG;
+  assert(!DAG.getDataLayout().isBigEndian());
+
   [[maybe_unused]] EVT VT = N->getValueType(0);
-  SmallVector<ByteProvider<SDValue>, 8> PermNodes;
+  SmallVector<ByteProvider<SDValue>, 4> PermNodes;
 
   // VT is known to be MVT::i32, so we need to provide 4 bytes.
   assert(VT == MVT::i32);
@@ -13977,49 +13982,59 @@ static SDValue matchPERM(SDNode *N, TargetLowering::DAGCombinerInfo &DCI) {
     // Find the ByteProvider that provides the ith byte of the result of OR
     std::optional<ByteProvider<SDValue>> P =
         calculateByteProvider(SDValue(N, 0), i, 0, /*StartingIndex = */ i);
-    // TODO support constantZero
-    if (!P || P->isConstantZero())
+    if (!P)
       return SDValue();
 
     PermNodes.push_back(*P);
   }
-  if (PermNodes.size() != 4)
-    return SDValue();
 
-  std::pair<unsigned, unsigned> FirstSrc(0, PermNodes[0].SrcOffset / 4);
-  std::optional<std::pair<unsigned, unsigned>> SecondSrc;
-  uint64_t PermMask = 0x00000000;
-  for (size_t i = 0; i < PermNodes.size(); i++) {
-    auto PermOp = PermNodes[i];
-    // Since the mask is applied to Src1:Src2, Src1 bytes must be offset
-    // by sizeof(Src2) = 4
-    int SrcByteAdjust = 4;
-
+  static auto isSameSrc = [](SDValue SrcA, unsigned DWordA, SDValue SrcB,
+                             unsigned DWordB) {
     // If the Src uses a byte from a different DWORD, then it corresponds
     // with a difference source
-    if (!PermOp.hasSameSrc(PermNodes[FirstSrc.first]) ||
-        ((PermOp.SrcOffset / 4) != FirstSrc.second)) {
-      if (SecondSrc)
-        if (!PermOp.hasSameSrc(PermNodes[SecondSrc->first]) ||
-            ((PermOp.SrcOffset / 4) != SecondSrc->second))
-          return SDValue();
+    return SrcA == SrcB && DWordA == DWordB;
+  };
 
-      // Set the index of the second distinct Src node
-      SecondSrc = {i, PermNodes[i].SrcOffset / 4};
-      assert(!(PermNodes[SecondSrc->first].Src->getValueSizeInBits() % 8));
-      SrcByteAdjust = 0;
+  SDValue Src0, Src1;
+  unsigned DWord0, DWord1;
+  uint64_t PermMask = 0x00000000;
+  for (size_t i = 0; i < PermNodes.size(); i++) {
+    ByteProvider<SDValue> PermOp = PermNodes[i];
+    if (PermOp.isConstantZero()) {
+      PermMask |= 0x0c << (i * 8);
+      continue;
     }
-    assert((PermOp.SrcOffset % 4) + SrcByteAdjust < 8);
-    assert(!DAG.getDataLayout().isBigEndian());
-    PermMask |= ((PermOp.SrcOffset % 4) + SrcByteAdjust) << (i * 8);
+
+    const SDValue SrcI = PermOp.Src.value();
+    const unsigned DWordI = PermOp.SrcOffset / 4;
+    const unsigned ByteI = PermOp.SrcOffset % 4;
+    if (!Src0) {
+      Src0 = SrcI;
+      DWord0 = DWordI;
+    }
+
+    if (!isSameSrc(Src0, DWord0, SrcI, DWordI)) {
+      if (!Src1) {
+        Src1 = SrcI;
+        DWord1 = DWordI;
+      } else if (!isSameSrc(Src1, DWord1, SrcI, DWordI))
+        return SDValue();
+    }
+
+    // Since the mask is applied to Src0:Src1, Src0 bytes must be offset
+    // by sizeof(Src1) = 4
+    const int SrcByteAdjust = SrcI == Src0 ? 4 : 0;
+    assert(ByteI + SrcByteAdjust < 8);
+    PermMask |= (ByteI + SrcByteAdjust) << (i * 8);
   }
+
   SDLoc DL(N);
-  SDValue Op = *PermNodes[FirstSrc.first].Src;
-  Op = getDWordFromOffset(DAG, DL, Op, FirstSrc.second);
+  SDValue Op = Src0;
+  Op = getDWordFromOffset(DAG, DL, Op, DWord0);
   assert(Op.getValueSizeInBits() == 32);
 
   // Check that we are not just extracting the bytes in order from an op
-  if (!SecondSrc) {
+  if (!Src1) {
     int Low16 = PermMask & 0xffff;
     int Hi16 = (PermMask & 0xffff0000) >> 16;
 
@@ -14031,12 +14046,12 @@ static SDValue matchPERM(SDNode *N, TargetLowering::DAGCombinerInfo &DCI) {
       return DAG.getBitcast(MVT::getIntegerVT(32), Op);
   }
 
-  SDValue OtherOp = SecondSrc ? *PermNodes[SecondSrc->first].Src : Op;
-
-  if (SecondSrc) {
-    OtherOp = getDWordFromOffset(DAG, DL, OtherOp, SecondSrc->second);
+  SDValue OtherOp;
+  if (Src1) {
+    OtherOp = getDWordFromOffset(DAG, DL, Src1, DWord1);
     assert(OtherOp.getValueSizeInBits() == 32);
-  }
+  } else
+    OtherOp = Op;
 
   if (hasNon16BitAccesses(PermMask, Op, OtherOp)) {
 
