@@ -159,7 +159,8 @@ private:
   void analyzePromoteToVector(AllocaAnalysis &AA) const;
   void promoteAllocaToVector(AllocaAnalysis &AA);
   void analyzePromoteToLDS(AllocaAnalysis &AA) const;
-  bool tryPromoteAllocaToLDS(AllocaAnalysis &AA, bool SufficientLDS);
+  bool tryPromoteAllocaToLDS(AllocaAnalysis &AA, bool SufficientLDS,
+                             DenseMap<Value *, User *> &Repl);
 
   void scoreAlloca(AllocaAnalysis &AA) const;
 
@@ -413,6 +414,7 @@ bool AMDGPUPromoteAllocaImpl::run(Function &F, bool PromoteToLDS) {
   );
   // clang-format on
 
+  llvm::DenseMap<Value *, User *> Repl;
   bool Changed = false;
   for (AllocaAnalysis &AA : Allocas) {
     if (AA.Vector.Ty) {
@@ -435,9 +437,14 @@ bool AMDGPUPromoteAllocaImpl::run(Function &F, bool PromoteToLDS) {
       }
     }
 
-    if (AA.LDS.Enable && tryPromoteAllocaToLDS(AA, SufficientLDS))
+    if (AA.LDS.Enable && tryPromoteAllocaToLDS(AA, SufficientLDS, Repl))
       Changed = true;
   }
+  for (auto &KV : Repl) {
+    Value *V = KV.getFirst();
+    V->deleteValue();
+  }
+  Repl.clear();
 
   // NOTE: tryPromoteAllocaToVector removes the alloca, so Allocas contains
   // dangling pointers. If we want to reuse it past this point, the loop above
@@ -1550,8 +1557,9 @@ bool AMDGPUPromoteAllocaImpl::hasSufficientLocalMem(const Function &F) {
 }
 
 // FIXME: Should try to pick the most likely to be profitable allocas first.
-bool AMDGPUPromoteAllocaImpl::tryPromoteAllocaToLDS(AllocaAnalysis &AA,
-                                                    bool SufficientLDS) {
+bool AMDGPUPromoteAllocaImpl::tryPromoteAllocaToLDS(
+    AllocaAnalysis &AA, bool SufficientLDS,
+    DenseMap<Value *, User *> &Replaced) {
   LLVM_DEBUG(dbgs() << "Trying to promote to LDS: " << *AA.Alloca << '\n');
 
   // Not likely to have sufficient local memory for promotion.
@@ -1620,11 +1628,20 @@ bool AMDGPUPromoteAllocaImpl::tryPromoteAllocaToLDS(AllocaAnalysis &AA,
   AA.Alloca->replaceAllUsesWith(Offset);
   AA.Alloca->eraseFromParent();
 
-  SmallVector<IntrinsicInst *> DeferredIntrs;
-
   PointerType *NewPtrTy = PointerType::get(Context, AMDGPUAS::LOCAL_ADDRESS);
 
+  auto replace = [&Replaced](IntrinsicInst *Old, User *New) {
+    if (!Replaced.insert({Old, New}).second)
+      llvm_unreachable("Instruction already replaced!?");
+    Old->removeFromParent();
+  };
   for (Value *V : AA.LDS.Worklist) {
+    for (;;) {
+      auto R = Replaced.find(V);
+      if (R == Replaced.end())
+        break;
+      V = R->getSecond();
+    }
     CallInst *Call = dyn_cast<CallInst>(V);
     if (!Call) {
       if (ICmpInst *CI = dyn_cast<ICmpInst>(V)) {
@@ -1678,18 +1695,28 @@ bool AMDGPUPromoteAllocaImpl::tryPromoteAllocaToLDS(AllocaAnalysis &AA,
       Intr->eraseFromParent();
       continue;
     case Intrinsic::memcpy:
-    case Intrinsic::memmove:
-      // These have 2 pointer operands. In case if second pointer also needs
-      // to be replaced we defer processing of these intrinsics until all
-      // other values are processed.
-      DeferredIntrs.push_back(Intr);
+    case Intrinsic::memmove: {
+      MemTransferInst *MI = cast<MemTransferInst>(Intr);
+      auto *B = Builder.CreateMemTransferInst(
+          Intr->getIntrinsicID(), MI->getRawDest(), MI->getDestAlign(),
+          MI->getRawSource(), MI->getSourceAlign(), MI->getLength(),
+          MI->isVolatile());
+
+      for (unsigned I = 0; I != 2; ++I) {
+        if (uint64_t Bytes = Intr->getParamDereferenceableBytes(I)) {
+          B->addDereferenceableParamAttr(I, Bytes);
+        }
+      }
+
+      replace(Intr, B);
       continue;
+    }
     case Intrinsic::memset: {
       MemSetInst *MemSet = cast<MemSetInst>(Intr);
-      Builder.CreateMemSet(MemSet->getRawDest(), MemSet->getValue(),
-                           MemSet->getLength(), MemSet->getDestAlign(),
-                           MemSet->isVolatile());
-      Intr->eraseFromParent();
+      auto *NewIntr = Builder.CreateMemSet(
+          MemSet->getRawDest(), MemSet->getValue(), MemSet->getLength(),
+          MemSet->getDestAlign(), MemSet->isVolatile());
+      replace(Intr, NewIntr);
       continue;
     }
     case Intrinsic::invariant_start:
@@ -1710,7 +1737,8 @@ bool AMDGPUPromoteAllocaImpl::tryPromoteAllocaToLDS(AllocaAnalysis &AA,
           CallInst::Create(F, Args, Intr->getName(), Intr->getIterator());
       Intr->mutateType(NewIntr->getType());
       Intr->replaceAllUsesWith(NewIntr);
-      Intr->eraseFromParent();
+
+      replace(Intr, NewIntr);
       continue;
     }
     case Intrinsic::objectsize: {
@@ -1721,32 +1749,14 @@ bool AMDGPUPromoteAllocaImpl::tryPromoteAllocaToLDS(AllocaAnalysis &AA,
           {Intr->getType(), PointerType::get(Context, AMDGPUAS::LOCAL_ADDRESS)},
           {Src, Intr->getOperand(1), Intr->getOperand(2), Intr->getOperand(3)});
       Intr->replaceAllUsesWith(NewCall);
-      Intr->eraseFromParent();
+
+      replace(Intr, NewCall);
       continue;
     }
     default:
       Intr->print(errs());
       llvm_unreachable("Don't know how to promote alloca intrinsic use.");
     }
-  }
-
-  for (IntrinsicInst *Intr : DeferredIntrs) {
-    Builder.SetInsertPoint(Intr);
-    Intrinsic::ID ID = Intr->getIntrinsicID();
-    assert(ID == Intrinsic::memcpy || ID == Intrinsic::memmove);
-
-    MemTransferInst *MI = cast<MemTransferInst>(Intr);
-    auto *B = Builder.CreateMemTransferInst(
-        ID, MI->getRawDest(), MI->getDestAlign(), MI->getRawSource(),
-        MI->getSourceAlign(), MI->getLength(), MI->isVolatile());
-
-    for (unsigned I = 0; I != 2; ++I) {
-      if (uint64_t Bytes = Intr->getParamDereferenceableBytes(I)) {
-        B->addDereferenceableParamAttr(I, Bytes);
-      }
-    }
-
-    Intr->eraseFromParent();
   }
 
   return true;
