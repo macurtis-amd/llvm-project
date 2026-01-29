@@ -1,0 +1,15 @@
+File complex-control-flow-11blocks.mir changed on disk.  Reread from disk into complex-control-flow-11blocks.mir<NextUseAnalysis>? (yes or no) # RUN: llc -mtriple=amdgcn -mcpu=gfx1200 \
+# RUN:     -run-pass=amdgpu-next-use-analysis \
+# RUN:     -amdgpu-next-use-analysis-compatibility-mode=graphics \
+# RUN:     -amdgpu-next-use-analysis-dump-distance-as-json=- \
+# RUN:     -amdgpu-next-use-analysis-dump-distance-verbose \
+# RUN:     -o /dev/null \
+# RUN:     %s 2>&1 | FileCheck --check-prefix=CHECK-GX-JSON %s
+
+# RUN-DISABLED: llc -mtriple=amdgcn -mcpu=gfx1200 \
+# RUN-DISABLED:     -run-pass=amdgpu-next-use-analysis \
+# RUN-DISABLED:     -amdgpu-next-use-analysis-compatibility-mode=machine-learning \
+# RUN-DISABLED:     -amdgpu-next-use-analysis-dump-distance-as-json=- \
+# RUN-DISABLED:     -amdgpu-next-use-analysis-dump-distance-verbose \
+# RUN-DISABLED:     -o /dev/null \
+# RUN-DISABLED:     %s 2>&1 | FileCheck --check-prefix=CHECK-ML-JSON %s

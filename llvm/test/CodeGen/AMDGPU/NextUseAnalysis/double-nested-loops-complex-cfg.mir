@@ -1,0 +1,933 @@
+# XFAIL: *
+
+# RUN: llc -mtriple=amdgcn -mcpu=gfx1200 \
+# RUN:     -run-pass=amdgpu-next-use-analysis \
+# RUN:     -amdgpu-next-use-analysis-compatibility-mode=graphics \
+# RUN:     -amdgpu-next-use-analysis-dump-distance-as-json=- \
+# RUN:     -amdgpu-next-use-analysis-dump-distance-verbose \
+# RUN:     -o /dev/null \
+# RUN:     %s 2>&1 | FileCheck --check-prefix=CHECK-GX-JSON %s
+
+# RUN-DISABLED: llc -mtriple=amdgcn -mcpu=gfx1200 \
+# RUN-DISABLED:     -run-pass=amdgpu-next-use-analysis \
+# RUN-DISABLED:     -amdgpu-next-use-analysis-compatibility-mode=machine-learning \
+# RUN-DISABLED:     -amdgpu-next-use-analysis-dump-distance-as-json=- \
+# RUN-DISABLED:     -amdgpu-next-use-analysis-dump-distance-verbose \
+# RUN-DISABLED:     -o /dev/null \
+# RUN-DISABLED:     %s 2>&1 | FileCheck --check-prefix=CHECK-ML-JSON %s
+# 
+# MIR CFG:
+#
+#                                       bb.0.entry
+#                                           |
+#                                       bb.1.loop1.header<----+
+#                                           |        |        |
+#                       bb.2.loop2.header.preheader  |        |
+#                                           |        |        |
+#            +------------------->bb.4.loop2.header  |        |
+#            |                         /      |      |        |
+#            |                    bb.7.bb1    |      |        |
+#            |                     /    |     |      |        |
+#            |       bb.9.loop2.latch2  |     |      |        |
+#            |                     \    |     |      |        |
+#            |                  bb.5.Flow28   |      |        |
+#            |                         \      |      |        |
+#            |                       bb.8.Flow27     |        |
+#            |                         /      |      |        |
+#            |            bb.6.loop2.latch1   |      |        |
+#            |                         \      |      |        |
+#            +-----------------------bb.37.Flow29    |        |
+#                                         |          |        |
+#                           bb.38.loop.exit.guard23  |        |
+#                                   /     |          |        |
+#                             bb.14.bb3   |          |        |
+#                                   \     |          |        |
+#                                 bb.10.Flow31       |        |
+#                                     |     |        |        |
+#                     bb.11.loop2.side.exit |        |        |
+#                            /        |     |        |        |
+#                     bb.13.bb2       |     |        |        |
+#                            \        |     |        |        |
+#                           bb.15.Flow33    |        |        |
+#                                \          |        |        |
+#                                bb.12.Flow32        |        |
+#                                     |     |        |        |
+#                                 bb.16.bb4 |        |        |
+#                                  /     |  |        |        |
+#                            bb.18.bb5   |  |        |        |
+#                             /     |    |  |        |        |
+#              bb.24.loop1.latch3   |    |  |        |        |
+#                             \     |    |  |        |        |
+#                         bb.21.Flow36   |  |        |        |
+#                                   |    |  |        |        |
+#                              bb.23.Flow35 |        |        |
+#                                /       |  |        |        |
+#                  bb.22.loop1.latch2    |  |        |        |
+#                                \       |  |        |        |
+#                              bb.19.Flow37 |        |        |
+#                                   \       |        |        |
+#                                 bb.17.Flow34       |        |
+#                                   /       |        |        |
+#                     bb.20.loop1.latch1    |        |        |
+#                                   \       |        |        |
+#                                 bb.33.Flow38       |        |
+#                                          \         |        |
+#                                           bb.3.Flow30-------+
+#                                               |
+#                                     bb.34.loop.exit.guard
+#                                        /               |
+#                            bb.35.loop.exit.guard21     |
+#                                      /        |        |
+#                      bb.36.loop.exit.guard22  |        |
+#                                /    |         |        |
+#            bb.29.loop1.side.exit3   |         |        |
+#                                \    |         |        |
+#                              bb.30.Flow       |        |
+#                                       \       |        |
+#                                      bb.27.Flow24      |
+#                                       /       |        |
+#                      bb.28.loop1.side.exit2   |        |
+#                                       \       |        |
+#                                      bb.31.Flow25	 |
+#                                               \        |
+#                                              bb.25.Flow26
+#                                               /      |
+#                             bb.26.loop1.sode.exit1   |
+#                                               \      |
+#                                              bb.32.exit
+#
+
+
+
+
+--- |
+  define amdgpu_ps i32 @test15(ptr addrspace(1) %p1, ptr addrspace(1) %p2, ptr addrspace(1) %p3, ptr addrspace(1) %p4, ptr addrspace(1) %p5, ptr addrspace(1) %p6, i32 %TC1, i32 %TC2, i32 %TC3, i32 %TC4, i32 %TC5, i32 %Val) {
+  0:
+  %ld1 = load i32, ptr addrspace(1) %p1, align 1
+  %add1 = add i32 %ld1, 100
+  br label %1
+  1:
+  %phi.inc1 = phi i32 [ 0, %0 ], [ %inc1, %11 ], [ %phi.inc2, %12 ], [ %phi.inc3, %13 ]
+  %phi.inc2 = phi i32 [ 1, %0 ], [ %phi.inc1, %11 ], [ %inc2, %12 ], [ %phi.inc3, %13 ]
+  %phi.inc3 = phi i32 [ 2, %0 ], [ %phi.inc1, %11 ], [ %phi.inc2, %12 ], [ %inc3, %13 ]
+  %phi.mul1 = phi i32 [ 100, %0 ], [ %mul4, %11 ], [ %mul6, %12 ], [ %mul7, %13 ]
+  %phi.mul2 = phi i32 [ 500, %0 ], [ %mul9, %11 ], [ %phi.mul3, %12 ], [ %phi.mul1, %13 ]
+  %sext1 = sext i32 %phi.inc1 to i64
+  %gep1 = getelementptr inbounds i64, ptr addrspace(1) %p2, i64 %sext1
+  %ld2 = load i32, ptr addrspace(1) %gep1, align 1
+  store i32 %ld2, ptr addrspace(1) %p1
+  %cond1 = icmp ult i32 %phi.inc1, %phi.inc2
+  br i1 %cond1, label %2, label %14
+  2:
+  %phi.inc4 = phi i32 [ 3, %1 ], [ %inc4, %3 ], [ %phi.inc5, %5 ]
+  %phi.inc5 = phi i32 [ 4, %1 ], [ %phi.inc4, %3 ], [ %inc5, %5 ]
+  %phi.div = phi i32 [ %phi.inc2, %1 ], [ %div1, %3 ], [ %div2, %5 ]
+  %phi.mul3 = phi i32 [ %phi.inc2, %1 ], [ %mul1, %3 ], [ %mul2, %5 ]
+  %cond2 = icmp ult i32 %phi.inc4, %phi.inc2
+  br i1 %cond2, label %3, label %4
+  3:
+  %mul1 = mul i32 %ld2, %phi.inc4
+  store i32 %mul1, ptr addrspace(1) %p5
+  %inc4 = add i32 %phi.inc4, 1
+  %div1 = udiv i32 %phi.inc4, %phi.inc5
+  %cond3 = icmp ult i32 %inc4, %TC1
+  br i1 %cond3, label %2, label %6
+  4:
+  %mul2 = mul i32 %ld1, %phi.inc5
+  %sext2 = sext i32 %phi.inc2 to i64
+  %gep2 = getelementptr inbounds i64, ptr addrspace(1) %p5, i64 %sext2
+  store i32 %mul2, ptr addrspace(1) %gep2
+  %div2 = udiv i32 %phi.inc5, %phi.inc4
+  %cond4 = icmp ult i32 %mul2, %ld2
+  br i1 %cond4, label %5, label %6
+  5:
+  %inc5 = add i32 %phi.inc5, 1
+  %cond5 = icmp ult i32 %inc5, %TC2
+  br i1 %cond5, label %2, label %8
+  6:
+  %mul3 = mul i32 %phi.inc4, %phi.inc5
+  store i32 %mul3, ptr addrspace(1) %p5
+  %mul9 = mul i32 %phi.mul3, %phi.div
+  %cond11 = icmp ult i32 %mul3, %Val
+  br i1 %cond11, label %7, label %15
+  7:
+  %ld3 = load i32, ptr addrspace(1) %p3, align 4
+  %mul4 = mul i32 %ld3, %phi.inc3
+  store i32 %mul3, ptr addrspace(1) %p4
+  %cond6 = icmp ult i32 %mul4, %mul3
+  br i1 %cond6, label %11, label %9
+  8:
+  %ld4 = load i32, ptr addrspace(1) %p4, align 2
+  %mul5 = mul i32 %ld4, %inc5
+  store i32 %mul5, ptr addrspace(1) %p3
+  br label %9
+  9:
+  %phi1 = phi i1 [ %cond6, %7 ], [ %cond4, %8 ]
+  %phi2 = phi i32 [ %ld3, %7 ], [ %ld4, %8 ]
+  %ld5 = load i32, ptr addrspace(1) %p5, align 1
+  %mul6 = mul i32 %ld5, %phi2
+  store i32 %mul6, ptr addrspace(1) %p2, align 2
+  br i1 %phi1, label %12, label %10
+  10:
+  %ld6 = load i32, ptr addrspace(1) %p6, align 1
+  %mul7 = mul i32 %ld6, %phi.inc3
+  store i32 %mul7, ptr addrspace(1) %p6, align 1
+  %cond7 = icmp ult i32 %mul7, %phi2
+  br i1 %cond7, label %13, label %16
+  11:
+  %inc1 = add i32 %phi.inc1, 1
+  %cond8 = icmp ult i32 %inc1, %TC3
+  br i1 %cond8, label %1, label %17
+  12:
+  %inc2 = add i32 %phi.inc2, 1
+  %cond9 = icmp ult i32 %inc2, %TC4
+  br i1 %cond9, label %1, label %17
+  13:
+  %inc3 = add i32 %phi.inc3, 1
+  %cond10 = icmp ult i32 %inc3, %TC5
+  br i1 %cond10, label %1, label %17
+  14:
+  %ld7 = load i32, ptr addrspace(1) %p3, align 1
+  %add2 = add i32 %ld7, %phi.inc1
+  %add3 = add i32 %add2, %phi.mul1
+  store i32 %add3, ptr addrspace(1) %p4, align 1
+  br label %17
+  15:
+  %ld8 = load i32, ptr addrspace(1) %p4, align 1
+  %mul8 = mul i32 %ld8, %phi.inc2
+  %add4 = add i32 %mul9, %mul8
+  store i32 %add4, ptr addrspace(1) %p3, align 1
+  br label %17
+  16:
+  %ld9 = load i32, ptr addrspace(1) %p5, align 1
+  %sub1 = sub i32 %ld9, %phi.inc3
+  %add5 = add i32 %sub1, %phi.mul2
+  store i32 %add5, ptr addrspace(1) %p2, align 1
+  br label %17
+  17:
+  %phi3 = phi i32 [ %inc1, %11 ], [ %inc2, %12 ], [ %inc3, %13 ], [ %add3, %14 ], [ %add4, %15 ], [ %add5, %16 ]
+  %add6 = add i32 %phi3, %add1
+  ret i32 %add6
+  }
+...
+
+---
+name:            test15
+alignment:       1
+exposesReturnsTwice: false
+legalized:       false
+regBankSelected: false
+selected:        false
+failedISel:      false
+tracksRegLiveness: true
+hasWinCFI:       false
+noPhis:          false
+isSSA:           true
+machineFunctionInfo: {}
+body:             |
+  bb.0:
+    successors: %bb.1(0x80000000)
+    liveins: $vgpr0, $vgpr1, $vgpr2, $vgpr3, $vgpr4, $vgpr5, $vgpr6, $vgpr7, $vgpr8, $vgpr9, $vgpr10, $vgpr11, $vgpr12, $vgpr13, $vgpr14, $vgpr15, $vgpr16, $vgpr17
+  
+    %0:vgpr_32 = COPY killed $vgpr17
+    %1:vgpr_32 = COPY killed $vgpr16
+    %2:vgpr_32 = COPY killed $vgpr15
+    %3:vgpr_32 = COPY killed $vgpr14
+    %4:vgpr_32 = COPY killed $vgpr13
+    %5:vgpr_32 = COPY killed $vgpr12
+    %6:vgpr_32 = COPY killed $vgpr11
+    %7:vgpr_32 = COPY killed $vgpr10
+    %8:vgpr_32 = COPY killed $vgpr9
+    %9:vgpr_32 = COPY killed $vgpr8
+    %10:vgpr_32 = COPY killed $vgpr7
+    %11:vgpr_32 = COPY killed $vgpr6
+    %12:vgpr_32 = COPY killed $vgpr5
+    %13:vgpr_32 = COPY killed $vgpr4
+    %14:vgpr_32 = COPY killed $vgpr3
+    %15:vgpr_32 = COPY killed $vgpr2
+    %16:vgpr_32 = COPY killed $vgpr1
+    %17:vgpr_32 = COPY killed $vgpr0
+    %18:vreg_64 = REG_SEQUENCE killed %7, %subreg.sub0, killed %6, %subreg.sub1
+    %19:vreg_64 = REG_SEQUENCE killed %9, %subreg.sub0, killed %8, %subreg.sub1
+    %20:vreg_64 = REG_SEQUENCE killed %11, %subreg.sub0, killed %10, %subreg.sub1
+    %21:vreg_64 = REG_SEQUENCE killed %13, %subreg.sub0, killed %12, %subreg.sub1
+    %22:vreg_64 = REG_SEQUENCE killed %15, %subreg.sub0, killed %14, %subreg.sub1
+    %23:vreg_64 = REG_SEQUENCE killed %17, %subreg.sub0, killed %16, %subreg.sub1
+    %24:vgpr_32 = GLOBAL_LOAD_UBYTE %23, 0, 0, implicit $exec :: (load (s8) from %ir.p1, addrspace 1)
+    %25:vgpr_32 = GLOBAL_LOAD_UBYTE %23, 1, 0, implicit $exec :: (load (s8) from %ir.p1 + 1, addrspace 1)
+    %26:vgpr_32 = V_LSHL_OR_B32_e64 killed %25, 8, killed %24, implicit $exec
+    %27:vgpr_32 = GLOBAL_LOAD_UBYTE %23, 2, 0, implicit $exec :: (load (s8) from %ir.p1 + 2, addrspace 1)
+    %28:vgpr_32 = GLOBAL_LOAD_UBYTE %23, 3, 0, implicit $exec :: (load (s8) from %ir.p1 + 3, addrspace 1)
+    %29:vgpr_32 = V_LSHL_OR_B32_e64 killed %28, 8, killed %27, implicit $exec
+    %30:vgpr_32 = V_LSHL_OR_B32_e64 killed %29, 16, killed %26, implicit $exec
+    %31:vgpr_32 = V_MOV_B32_e32 500, implicit $exec
+    %32:vgpr_32 = V_MOV_B32_e32 100, implicit $exec
+    %33:vgpr_32 = V_MOV_B32_e32 2, implicit $exec
+    %34:vgpr_32 = V_MOV_B32_e32 1, implicit $exec
+    %35:sreg_32 = S_MOV_B32 0
+    %36:vgpr_32 = V_MOV_B32_e32 0, implicit $exec
+  
+  bb.1:
+    successors: %bb.2(0x40000000), %bb.3(0x40000000)
+  
+    %37:sreg_32 = PHI undef %38:sreg_32, %bb.0, %121, %bb.3
+    %39:sreg_32 = PHI undef %40:sreg_32, %bb.0, %118, %bb.3
+    %41:sreg_32 = PHI undef %42:sreg_32, %bb.0, %115, %bb.3
+    %43:sreg_32 = PHI undef %44:sreg_32, %bb.0, %92, %bb.3
+    %45:sreg_32 = PHI undef %46:sreg_32, %bb.0, %93, %bb.3
+    %47:sreg_32 = PHI undef %48:sreg_32, %bb.0, %94, %bb.3
+    %49:sreg_32 = PHI undef %50:sreg_32, %bb.0, %95, %bb.3
+    %51:sreg_32 = PHI %35, %bb.0, %112, %bb.3
+    %52:vgpr_32 = PHI undef %53:vgpr_32, %bb.0, %96, %bb.3
+    %54:vgpr_32 = PHI undef %53:vgpr_32, %bb.0, %97, %bb.3
+    %55:vgpr_32 = PHI %36, %bb.0, %103, %bb.3
+    %56:vgpr_32 = PHI %34, %bb.0, %102, %bb.3
+    %57:vgpr_32 = PHI %33, %bb.0, %101, %bb.3
+    %58:vgpr_32 = PHI %32, %bb.0, %100, %bb.3
+    %59:vgpr_32 = PHI %31, %bb.0, %98, %bb.3
+    %60:vgpr_32 = V_ASHRREV_I32_e64 31, %55, implicit $exec
+    %61:vreg_64 = REG_SEQUENCE %55, %subreg.sub0, killed %60, %subreg.sub1
+    %62:vreg_64 = nsw V_LSHLREV_B64_pseudo_e64 3, killed %61, implicit $exec
+    %63:vgpr_32, %64:sreg_32_xm0_xexec = V_ADD_CO_U32_e64 %22.sub0, %62.sub0, 0, implicit $exec
+    %65:vgpr_32, dead $sgpr_null = V_ADDC_U32_e64 %22.sub1, killed %62.sub1, killed %64, 0, implicit $exec
+    %66:vreg_64 = REG_SEQUENCE killed %63, %subreg.sub0, killed %65, %subreg.sub1
+    %67:vgpr_32 = GLOBAL_LOAD_UBYTE %66, 0, 0, implicit $exec :: (load (s8) from %ir.gep1, addrspace 1)
+    %68:vgpr_32 = GLOBAL_LOAD_UBYTE %66, 1, 0, implicit $exec :: (load (s8) from %ir.gep1 + 1, addrspace 1)
+    %69:vgpr_32 = V_LSHL_OR_B32_e64 killed %68, 8, killed %67, implicit $exec
+    %70:vgpr_32 = GLOBAL_LOAD_UBYTE %66, 2, 0, implicit $exec :: (load (s8) from %ir.gep1 + 2, addrspace 1)
+    %71:vgpr_32 = GLOBAL_LOAD_UBYTE killed %66, 3, 0, implicit $exec :: (load (s8) from %ir.gep1 + 3, addrspace 1)
+    %72:vgpr_32 = V_LSHL_OR_B32_e64 killed %71, 8, killed %70, implicit $exec
+    %73:vgpr_32 = V_LSHL_OR_B32_e64 killed %72, 16, killed %69, implicit $exec
+    GLOBAL_STORE_DWORD %23, %73, 0, 0, implicit $exec :: (store (s32) into %ir.p1, addrspace 1)
+    %74:sreg_32 = V_CMP_LT_U32_e64 %55, %56, implicit $exec
+    %75:sreg_32 = S_ANDN2_B32 killed %49, $exec_lo, implicit-def dead $scc
+    %76:sreg_32 = COPY %75
+    %77:sreg_32 = S_ANDN2_B32 killed %47, $exec_lo, implicit-def dead $scc
+    %78:sreg_32 = COPY %77
+    %79:sreg_32 = S_OR_B32 killed %45, $exec_lo, implicit-def dead $scc
+    %80:sreg_32 = S_OR_B32 killed %43, $exec_lo, implicit-def dead $scc
+    %81:sreg_32 = SI_IF killed %74, %bb.3, implicit-def dead $exec, implicit-def dead $scc, implicit $exec
+    S_BRANCH %bb.2
+  
+  bb.2:
+    successors: %bb.4(0x80000000)
+  
+    %82:vgpr_32 = V_ASHRREV_I32_e64 31, %56, implicit $exec
+    %83:vreg_64 = REG_SEQUENCE %56, %subreg.sub0, killed %82, %subreg.sub1
+    %84:vgpr_32 = V_MOV_B32_e32 3, implicit $exec
+    %85:vreg_64 = nsw V_LSHLREV_B64_pseudo_e64 3, killed %83, implicit $exec
+    %86:vgpr_32, %87:sreg_32_xm0_xexec = V_ADD_CO_U32_e64 %19.sub0, %85.sub0, 0, implicit $exec
+    %88:vgpr_32, dead $sgpr_null = V_ADDC_U32_e64 %19.sub1, killed %85.sub1, killed %87, 0, implicit $exec
+    %89:vreg_64 = REG_SEQUENCE killed %86, %subreg.sub0, killed %88, %subreg.sub1
+    %90:vgpr_32 = V_MOV_B32_e32 4, implicit $exec
+    %91:sreg_32 = S_MOV_B32 0
+    S_BRANCH %bb.4
+  
+  bb.3:
+    successors: %bb.34(0x04000000), %bb.1(0x7c000000)
+  
+    %92:sreg_32 = PHI %80, %bb.1, %487, %bb.33
+    %93:sreg_32 = PHI %79, %bb.1, %484, %bb.33
+    %94:sreg_32 = PHI %78, %bb.1, %481, %bb.33
+    %95:sreg_32 = PHI %76, %bb.1, %478, %bb.33
+    %96:vgpr_32 = PHI %52, %bb.1, %226, %bb.33
+    %97:vgpr_32 = PHI %54, %bb.1, %227, %bb.33
+    %98:vgpr_32 = PHI undef %99:vgpr_32, %bb.1, %464, %bb.33
+    %100:vgpr_32 = PHI undef %99:vgpr_32, %bb.1, %465, %bb.33
+    %101:vgpr_32 = PHI undef %99:vgpr_32, %bb.1, %466, %bb.33
+    %102:vgpr_32 = PHI undef %99:vgpr_32, %bb.1, %467, %bb.33
+    %103:vgpr_32 = PHI undef %99:vgpr_32, %bb.1, %468, %bb.33
+    %104:vgpr_32 = PHI undef %105:vgpr_32, %bb.1, %469, %bb.33
+    %106:vgpr_32 = PHI %55, %bb.1, %470, %bb.33
+    %107:vgpr_32 = PHI %56, %bb.1, %471, %bb.33
+    %108:vgpr_32 = PHI %57, %bb.1, %472, %bb.33
+    %109:vgpr_32 = PHI %58, %bb.1, %473, %bb.33
+    %110:vgpr_32 = PHI %59, %bb.1, %474, %bb.33
+    %111:vgpr_32 = PHI undef %105:vgpr_32, %bb.1, %475, %bb.33
+    SI_END_CF killed %81, implicit-def dead $exec, implicit-def dead $scc, implicit $exec
+    %112:sreg_32 = SI_IF_BREAK %92, killed %51, implicit-def dead $scc
+    %113:sreg_32 = S_ANDN2_B32 killed %41, $exec_lo, implicit-def dead $scc
+    %114:sreg_32 = S_AND_B32 %95, $exec_lo, implicit-def dead $scc
+    %115:sreg_32 = S_OR_B32 killed %113, killed %114, implicit-def dead $scc
+    %116:sreg_32 = S_ANDN2_B32 killed %39, $exec_lo, implicit-def dead $scc
+    %117:sreg_32 = S_AND_B32 %94, $exec_lo, implicit-def dead $scc
+    %118:sreg_32 = S_OR_B32 killed %116, killed %117, implicit-def dead $scc
+    %119:sreg_32 = S_ANDN2_B32 killed %37, $exec_lo, implicit-def dead $scc
+    %120:sreg_32 = S_AND_B32 %93, $exec_lo, implicit-def dead $scc
+    %121:sreg_32 = S_OR_B32 killed %119, killed %120, implicit-def dead $scc
+    SI_LOOP %112, %bb.1, implicit-def dead $exec, implicit-def dead $scc, implicit $exec
+    S_BRANCH %bb.34
+  
+  bb.4:
+    successors: %bb.7(0x40000000), %bb.8(0x40000000)
+  
+    %122:sreg_32 = PHI undef %123:sreg_32, %bb.2, %507, %bb.37
+    %124:sreg_32 = PHI %91, %bb.2, %504, %bb.37
+    %125:vgpr_32 = PHI %84, %bb.2, %498, %bb.37
+    %126:vgpr_32 = PHI %90, %bb.2, %497, %bb.37
+    %127:vgpr_32 = PHI %56, %bb.2, %496, %bb.37
+    %128:vgpr_32 = PHI %56, %bb.2, %495, %bb.37
+    %129:sreg_32 = V_CMP_GE_U32_e64 %125, %56, implicit $exec
+    %130:sreg_32 = S_MOV_B32 -1
+    %131:sreg_32 = SI_IF killed %129, %bb.8, implicit-def dead $exec, implicit-def dead $scc, implicit $exec
+    S_BRANCH %bb.7
+  
+  bb.5:
+    successors: %bb.8(0x80000000)
+  
+    %132:sreg_32 = PHI %170, %bb.7, %208, %bb.9
+    %133:sreg_32 = PHI %170, %bb.7, %207, %bb.9
+    %134:vgpr_32 = PHI undef %135:vgpr_32, %bb.7, %168, %bb.9
+    %136:vgpr_32 = PHI undef %135:vgpr_32, %bb.7, %204, %bb.9
+    %137:vgpr_32 = PHI undef %135:vgpr_32, %bb.7, %205, %bb.9
+    %138:vgpr_32 = PHI undef %135:vgpr_32, %bb.7, %126, %bb.9
+    %139:vgpr_32 = PHI undef %140:vgpr_32, %bb.7, %205, %bb.9
+    SI_END_CF killed %171, implicit-def dead $exec, implicit-def dead $scc, implicit $exec
+    %141:sreg_32 = S_ORN2_B32 killed %132, $exec_lo, implicit-def dead $scc
+    S_BRANCH %bb.8
+  
+  bb.6:
+    successors: %bb.37(0x80000000)
+  
+    %142:vgpr_32 = V_MUL_LO_U32_e64 %73, %125, implicit $exec
+    GLOBAL_STORE_DWORD %19, %142, 0, 0, implicit $exec :: (store (s32) into %ir.p5, addrspace 1)
+    %143:vgpr_32 = V_ADD_U32_e64 1, %125, 0, implicit $exec
+    %144:vgpr_32 = V_CVT_F32_U32_e64 %126, 0, 0, implicit $mode, implicit $exec
+    %145:vgpr_32 = nofpexcept V_RCP_IFLAG_F32_e64 0, killed %144, 0, 0, implicit $mode, implicit $exec
+    %146:vgpr_32 = nnan ninf nsz arcp contract afn reassoc nofpexcept V_MUL_F32_e64 0, 1333788670, 0, killed %145, 0, 0, implicit $mode, implicit $exec
+    %147:vgpr_32 = nofpexcept V_CVT_U32_F32_e64 0, killed %146, 0, 0, implicit $mode, implicit $exec
+    %148:vgpr_32 = V_SUB_U32_e64 0, %126, 0, implicit $exec
+    %149:vgpr_32 = V_MUL_LO_U32_e64 killed %148, %147, implicit $exec
+    %150:vgpr_32 = V_MUL_HI_U32_e64 %147, killed %149, implicit $exec
+    %151:vgpr_32 = V_ADD_U32_e64 killed %147, killed %150, 0, implicit $exec
+    %152:vgpr_32 = V_MUL_HI_U32_e64 %125, killed %151, implicit $exec
+    %153:vgpr_32 = V_MUL_LO_U32_e64 %152, %126, implicit $exec
+    %154:vgpr_32 = V_SUB_U32_e64 %125, killed %153, 0, implicit $exec
+    %155:sreg_32_xm0_xexec = V_CMP_GE_U32_e64 %154, %126, implicit $exec
+    %156:vgpr_32 = V_ADD_U32_e64 1, %152, 0, implicit $exec
+    %157:vgpr_32 = V_CNDMASK_B32_e64 0, killed %152, 0, killed %156, %155, implicit $exec
+    %158:vgpr_32 = V_SUB_U32_e64 %154, %126, 0, implicit $exec
+    %159:vgpr_32 = V_CNDMASK_B32_e64 0, killed %154, 0, killed %158, killed %155, implicit $exec
+    %160:sreg_32_xm0_xexec = V_CMP_GE_U32_e64 killed %159, %126, implicit $exec
+    %161:vgpr_32 = V_ADD_U32_e64 1, %157, 0, implicit $exec
+    %162:vgpr_32 = V_CNDMASK_B32_e64 0, killed %157, 0, killed %161, killed %160, implicit $exec
+    %163:sreg_32 = V_CMP_GE_U32_e64 %143, %5, implicit $exec
+    %164:sreg_32 = S_OR_B32 killed %173, $exec_lo, implicit-def dead $scc
+    %165:sreg_32 = S_ANDN2_B32 killed %172, $exec_lo, implicit-def dead $scc
+    %166:sreg_32 = S_AND_B32 killed %163, $exec_lo, implicit-def dead $scc
+    %167:sreg_32 = S_OR_B32 killed %165, killed %166, implicit-def dead $scc
+    S_BRANCH %bb.37
+  
+  bb.7:
+    successors: %bb.9(0x40000000), %bb.5(0x40000000)
+  
+    %168:vgpr_32 = V_MUL_LO_U32_e64 %30, %126, implicit $exec
+    GLOBAL_STORE_DWORD %89, %168, 0, 0, implicit $exec :: (store (s32) into %ir.gep2, addrspace 1)
+    %169:sreg_32 = V_CMP_LT_U32_e64 %168, %73, implicit $exec
+    %170:sreg_32 = S_MOV_B32 -1
+    %171:sreg_32 = SI_IF killed %169, %bb.5, implicit-def dead $exec, implicit-def dead $scc, implicit $exec
+    S_BRANCH %bb.9
+  
+  bb.8:
+    successors: %bb.6(0x40000000), %bb.37(0x40000000)
+  
+    %172:sreg_32 = PHI %130, %bb.4, %141, %bb.5
+    %173:sreg_32 = PHI undef %174:sreg_32, %bb.4, %133, %bb.5
+    %175:vgpr_32 = PHI undef %176:vgpr_32, %bb.4, %134, %bb.5
+    %177:vgpr_32 = PHI undef %176:vgpr_32, %bb.4, %136, %bb.5
+    %178:vgpr_32 = PHI undef %176:vgpr_32, %bb.4, %137, %bb.5
+    %179:vgpr_32 = PHI undef %176:vgpr_32, %bb.4, %138, %bb.5
+    %180:vgpr_32 = PHI undef %176:vgpr_32, %bb.4, %125, %bb.5
+    %181:vgpr_32 = PHI undef %176:vgpr_32, %bb.4, %126, %bb.5
+    %182:vgpr_32 = PHI undef %176:vgpr_32, %bb.4, %127, %bb.5
+    %183:vgpr_32 = PHI undef %176:vgpr_32, %bb.4, %128, %bb.5
+    %184:vgpr_32 = PHI undef %176:vgpr_32, %bb.4, %139, %bb.5
+    %185:sreg_32 = SI_ELSE killed %131, %bb.37, implicit-def dead $exec, implicit-def dead $scc, implicit $exec
+    S_BRANCH %bb.6
+  
+  bb.9:
+    successors: %bb.5(0x80000000)
+  
+    %186:vgpr_32 = V_CVT_F32_U32_e64 %125, 0, 0, implicit $mode, implicit $exec
+    %187:vgpr_32 = nofpexcept V_RCP_IFLAG_F32_e64 0, killed %186, 0, 0, implicit $mode, implicit $exec
+    %188:vgpr_32 = nnan ninf nsz arcp contract afn reassoc nofpexcept V_MUL_F32_e64 0, 1333788670, 0, killed %187, 0, 0, implicit $mode, implicit $exec
+    %189:vgpr_32 = nofpexcept V_CVT_U32_F32_e64 0, killed %188, 0, 0, implicit $mode, implicit $exec
+    %190:vgpr_32 = V_SUB_U32_e64 0, %125, 0, implicit $exec
+    %191:vgpr_32 = V_MUL_LO_U32_e64 killed %190, %189, implicit $exec
+    %192:vgpr_32 = V_MUL_HI_U32_e64 %189, killed %191, implicit $exec
+    %193:vgpr_32 = V_ADD_U32_e64 killed %189, killed %192, 0, implicit $exec
+    %194:vgpr_32 = V_MUL_HI_U32_e64 %126, killed %193, implicit $exec
+    %195:vgpr_32 = V_MUL_LO_U32_e64 %194, %125, implicit $exec
+    %196:vgpr_32 = V_SUB_U32_e64 %126, killed %195, 0, implicit $exec
+    %197:sreg_32_xm0_xexec = V_CMP_GE_U32_e64 %196, %125, implicit $exec
+    %198:vgpr_32 = V_ADD_U32_e64 1, %194, 0, implicit $exec
+    %199:vgpr_32 = V_CNDMASK_B32_e64 0, killed %194, 0, killed %198, %197, implicit $exec
+    %200:vgpr_32 = V_SUB_U32_e64 %196, %125, 0, implicit $exec
+    %201:vgpr_32 = V_CNDMASK_B32_e64 0, killed %196, 0, killed %200, killed %197, implicit $exec
+    %202:sreg_32_xm0_xexec = V_CMP_GE_U32_e64 killed %201, %125, implicit $exec
+    %203:vgpr_32 = V_ADD_U32_e64 1, %199, 0, implicit $exec
+    %204:vgpr_32 = V_CNDMASK_B32_e64 0, killed %199, 0, killed %203, killed %202, implicit $exec
+    %205:vgpr_32 = V_ADD_U32_e64 1, %126, 0, implicit $exec
+    %206:sreg_32 = V_CMP_GE_U32_e64 %205, %4, implicit $exec
+    %207:sreg_32 = S_XOR_B32 $exec_lo, -1, implicit-def dead $scc
+    %208:sreg_32 = S_ORN2_B32 killed %206, $exec_lo, implicit-def dead $scc
+    S_BRANCH %bb.5
+  
+  bb.10:
+    successors: %bb.11(0x40000000), %bb.12(0x40000000)
+  
+    %209:sreg_32 = PHI %508, %bb.38, %252, %bb.14
+    %210:vgpr_32 = PHI undef %211:vgpr_32, %bb.38, %249, %bb.14
+    %212:sreg_32 = PHI undef %213:sreg_32, %bb.38, %251, %bb.14
+    %214:sreg_32 = S_MOV_B32 -1
+    %215:sreg_32 = SI_ELSE killed %509, %bb.12, implicit-def dead $exec, implicit-def dead $scc, implicit $exec
+    S_BRANCH %bb.11
+  
+  bb.11:
+    successors: %bb.13(0x40000000), %bb.15(0x40000000)
+  
+    %216:vgpr_32 = V_MUL_LO_U32_e64 killed %499, killed %500, implicit $exec
+    GLOBAL_STORE_DWORD %19, %216, 0, 0, implicit $exec :: (store (s32) into %ir.p5, addrspace 1)
+    %217:vgpr_32 = V_MUL_LO_U32_e64 %502, killed %501, implicit $exec
+    %218:sreg_32 = V_CMP_LT_U32_e64 %216, %0, implicit $exec
+    %219:sreg_32 = S_MOV_B32 0
+    %220:sreg_32 = SI_IF killed %218, %bb.15, implicit-def dead $exec, implicit-def dead $scc, implicit $exec
+    S_BRANCH %bb.13
+  
+  bb.12:
+    successors: %bb.16(0x40000000), %bb.17(0x40000000)
+  
+    %221:sreg_32 = PHI %209, %bb.10, %275, %bb.15
+    %222:sreg_32 = PHI %508, %bb.10, %272, %bb.15
+    %223:sreg_32 = PHI %212, %bb.10, %270, %bb.15
+    %224:sreg_32 = PHI %214, %bb.10, %267, %bb.15
+    %225:sreg_32 = PHI %508, %bb.10, %266, %bb.15
+    %226:vgpr_32 = PHI %52, %bb.10, %257, %bb.15
+    %227:vgpr_32 = PHI %54, %bb.10, %217, %bb.15
+    %228:vgpr_32 = PHI undef %229:vgpr_32, %bb.10, %258, %bb.15
+    %230:vgpr_32 = PHI undef %229:vgpr_32, %bb.10, %260, %bb.15
+    %231:vgpr_32 = PHI undef %229:vgpr_32, %bb.10, %261, %bb.15
+    %232:vgpr_32 = PHI undef %229:vgpr_32, %bb.10, %262, %bb.15
+    %233:vgpr_32 = PHI undef %229:vgpr_32, %bb.10, %263, %bb.15
+    %234:vgpr_32 = PHI undef %235:vgpr_32, %bb.10, %217, %bb.15
+    %236:vgpr_32 = PHI %210, %bb.10, %264, %bb.15
+    SI_END_CF killed %215, implicit-def dead $exec, implicit-def dead $scc, implicit $exec
+    %237:sreg_32 = S_MOV_B32 0
+    %238:sreg_32 = SI_IF killed %221, %bb.17, implicit-def dead $exec, implicit-def dead $scc, implicit $exec
+    S_BRANCH %bb.16
+  
+  bb.13:
+    successors: %bb.15(0x80000000)
+  
+    %239:vgpr_32 = GLOBAL_LOAD_DWORD %21, 0, 0, implicit $exec :: (load (s32) from %ir.p3, addrspace 1)
+    %240:vgpr_32 = V_MUL_LO_U32_e64 %239, %57, implicit $exec
+    GLOBAL_STORE_DWORD %20, %216, 0, 0, implicit $exec :: (store (s32) into %ir.p4, addrspace 1)
+    %241:sreg_32 = V_CMP_LT_U32_e64 %240, %216, implicit $exec
+    %242:sreg_32 = V_CMP_GE_U32_e64 %240, killed %216, implicit $exec
+    %243:sreg_32 = COPY $exec_lo
+    %244:sreg_32 = S_ANDN2_B32 %209, $exec_lo, implicit-def dead $scc
+    %245:sreg_32 = S_AND_B32 killed %242, $exec_lo, implicit-def dead $scc
+    %246:sreg_32 = S_OR_B32 killed %244, killed %245, implicit-def dead $scc
+    S_BRANCH %bb.15
+  
+  bb.14:
+    successors: %bb.10(0x80000000)
+  
+    %247:vgpr_32 = GLOBAL_LOAD_USHORT %20, 0, 0, implicit $exec :: (load (s16) from %ir.p4, addrspace 1)
+    %248:vgpr_32 = GLOBAL_LOAD_USHORT %20, 2, 0, implicit $exec :: (load (s16) from %ir.p4 + 2, addrspace 1)
+    %249:vgpr_32 = V_LSHL_OR_B32_e64 killed %248, 16, killed %247, implicit $exec
+    %250:vgpr_32 = V_MUL_LO_U32_e64 %249, killed %184, implicit $exec
+    GLOBAL_STORE_DWORD %21, killed %250, 0, 0, implicit $exec :: (store (s32) into %ir.p3, addrspace 1)
+    %251:sreg_32 = S_MOV_B32 -1
+    %252:sreg_32 = COPY $exec_lo
+    S_BRANCH %bb.10
+  
+  bb.15:
+    successors: %bb.12(0x80000000)
+  
+    %253:sreg_32 = PHI %209, %bb.11, %246, %bb.13
+    %254:sreg_32 = PHI %219, %bb.11, %243, %bb.13
+    %255:sreg_32 = PHI undef %256:sreg_32, %bb.11, %241, %bb.13
+    %257:vgpr_32 = PHI %52, %bb.11, %240, %bb.13
+    %258:vgpr_32 = PHI %55, %bb.11, undef %259:vgpr_32, %bb.13
+    %260:vgpr_32 = PHI %56, %bb.11, undef %259:vgpr_32, %bb.13
+    %261:vgpr_32 = PHI %57, %bb.11, undef %259:vgpr_32, %bb.13
+    %262:vgpr_32 = PHI %58, %bb.11, undef %259:vgpr_32, %bb.13
+    %263:vgpr_32 = PHI %59, %bb.11, undef %259:vgpr_32, %bb.13
+    %264:vgpr_32 = PHI undef %265:vgpr_32, %bb.11, %239, %bb.13
+    SI_END_CF killed %220, implicit-def dead $exec, implicit-def dead $scc, implicit $exec
+    %266:sreg_32 = COPY $exec_lo
+    %267:sreg_32 = S_XOR_B32 $exec_lo, -1, implicit-def dead $scc
+    %268:sreg_32 = S_ANDN2_B32 killed %212, $exec_lo, implicit-def dead $scc
+    %269:sreg_32 = S_AND_B32 killed %255, $exec_lo, implicit-def dead $scc
+    %270:sreg_32 = S_OR_B32 killed %268, killed %269, implicit-def dead $scc
+    %271:sreg_32 = S_AND_B32 killed %254, $exec_lo, implicit-def dead $scc
+    %272:sreg_32 = COPY killed %271
+    %273:sreg_32 = S_ANDN2_B32 killed %209, $exec_lo, implicit-def dead $scc
+    %274:sreg_32 = S_AND_B32 killed %253, $exec_lo, implicit-def dead $scc
+    %275:sreg_32 = S_OR_B32 killed %273, killed %274, implicit-def dead $scc
+    S_BRANCH %bb.12
+  
+  bb.16:
+    successors: %bb.18(0x40000000), %bb.23(0x40000000)
+  
+    %276:sreg_32 = S_MOV_B32 -1
+    %277:sreg_32 = S_XOR_B32 killed %223, -1, implicit-def dead $scc
+    %278:vgpr_32 = GLOBAL_LOAD_UBYTE %19, 0, 0, implicit $exec :: (load (s8) from %ir.p5, addrspace 1)
+    %279:vgpr_32 = GLOBAL_LOAD_UBYTE %19, 1, 0, implicit $exec :: (load (s8) from %ir.p5 + 1, addrspace 1)
+    %280:vgpr_32 = V_LSHL_OR_B32_e64 killed %279, 8, killed %278, implicit $exec
+    %281:vgpr_32 = GLOBAL_LOAD_UBYTE %19, 2, 0, implicit $exec :: (load (s8) from %ir.p5 + 2, addrspace 1)
+    %282:vgpr_32 = GLOBAL_LOAD_UBYTE %19, 3, 0, implicit $exec :: (load (s8) from %ir.p5 + 3, addrspace 1)
+    %283:vgpr_32 = V_LSHL_OR_B32_e64 killed %282, 8, killed %281, implicit $exec
+    %284:vgpr_32 = V_LSHL_OR_B32_e64 killed %283, 16, killed %280, implicit $exec
+    %285:vgpr_32 = V_MUL_LO_U32_e64 killed %284, %236, implicit $exec
+    GLOBAL_STORE_SHORT_D16_HI %22, %285, 2, 0, implicit $exec :: (store (s16) into %ir.p2 + 2, addrspace 1)
+    GLOBAL_STORE_SHORT %22, %285, 0, 0, implicit $exec :: (store (s16) into %ir.p2, addrspace 1)
+    %286:sreg_32 = S_MOV_B32 0
+    %287:sreg_32 = SI_IF killed %277, %bb.23, implicit-def dead $exec, implicit-def dead $scc, implicit $exec
+    S_BRANCH %bb.18
+  
+  bb.17:
+    successors: %bb.20(0x40000000), %bb.33(0x40000000)
+  
+    %288:sreg_32 = PHI %222, %bb.12, %345, %bb.19
+    %289:sreg_32 = PHI %214, %bb.12, %343, %bb.19
+    %290:sreg_32 = PHI %224, %bb.12, %342, %bb.19
+    %291:sreg_32 = PHI %225, %bb.12, %339, %bb.19
+    %292:sreg_32 = PHI %237, %bb.12, %336, %bb.19
+    %293:vgpr_32 = PHI undef %294:vgpr_32, %bb.12, %324, %bb.19
+    %295:vgpr_32 = PHI undef %294:vgpr_32, %bb.12, %325, %bb.19
+    %296:vgpr_32 = PHI undef %294:vgpr_32, %bb.12, %326, %bb.19
+    %297:vgpr_32 = PHI undef %294:vgpr_32, %bb.12, %327, %bb.19
+    %298:vgpr_32 = PHI undef %294:vgpr_32, %bb.12, %328, %bb.19
+    %299:vgpr_32 = PHI undef %300:vgpr_32, %bb.12, %329, %bb.19
+    %301:vgpr_32 = PHI %228, %bb.12, %330, %bb.19
+    %302:vgpr_32 = PHI %230, %bb.12, %331, %bb.19
+    %303:vgpr_32 = PHI %231, %bb.12, %332, %bb.19
+    %304:vgpr_32 = PHI %232, %bb.12, %333, %bb.19
+    %305:vgpr_32 = PHI %233, %bb.12, %334, %bb.19
+    SI_END_CF killed %238, implicit-def dead $exec, implicit-def dead $scc, implicit $exec
+    %306:sreg_32 = SI_IF killed %288, %bb.33, implicit-def dead $exec, implicit-def dead $scc, implicit $exec
+    S_BRANCH %bb.20
+  
+  bb.18:
+    successors: %bb.24(0x40000000), %bb.21(0x40000000)
+  
+    %307:vgpr_32 = GLOBAL_LOAD_UBYTE %18, 0, 0, implicit $exec :: (load (s8) from %ir.p6, addrspace 1)
+    %308:vgpr_32 = GLOBAL_LOAD_UBYTE %18, 1, 0, implicit $exec :: (load (s8) from %ir.p6 + 1, addrspace 1)
+    %309:vgpr_32 = V_LSHL_OR_B32_e64 killed %308, 8, killed %307, implicit $exec
+    %310:vgpr_32 = GLOBAL_LOAD_UBYTE %18, 2, 0, implicit $exec :: (load (s8) from %ir.p6 + 2, addrspace 1)
+    %311:vgpr_32 = GLOBAL_LOAD_UBYTE %18, 3, 0, implicit $exec :: (load (s8) from %ir.p6 + 3, addrspace 1)
+    %312:vgpr_32 = V_LSHL_OR_B32_e64 killed %311, 8, killed %310, implicit $exec
+    %313:vgpr_32 = V_LSHL_OR_B32_e64 killed %312, 16, killed %309, implicit $exec
+    %314:vgpr_32 = V_MUL_LO_U32_e64 killed %313, %57, implicit $exec
+    GLOBAL_STORE_BYTE %18, %314, 0, 0, implicit $exec :: (store (s8) into %ir.p6, addrspace 1)
+    GLOBAL_STORE_BYTE_D16_HI %18, %314, 2, 0, implicit $exec :: (store (s8) into %ir.p6 + 2, addrspace 1)
+    %315:vgpr_32 = V_LSHRREV_B32_e64 8, %314, implicit $exec
+    GLOBAL_STORE_BYTE %18, killed %315, 1, 0, implicit $exec :: (store (s8) into %ir.p6 + 1, addrspace 1)
+    %316:vgpr_32 = V_LSHRREV_B32_e64 24, %314, implicit $exec
+    GLOBAL_STORE_BYTE %18, killed %316, 3, 0, implicit $exec :: (store (s8) into %ir.p6 + 3, addrspace 1)
+    %317:sreg_32 = V_CMP_LT_U32_e64 %314, killed %236, implicit $exec
+    %318:sreg_32 = S_MOV_B32 -1
+    %319:sreg_32 = SI_IF killed %317, %bb.21, implicit-def dead $exec, implicit-def dead $scc, implicit $exec
+    S_BRANCH %bb.24
+  
+  bb.19:
+    successors: %bb.17(0x80000000)
+  
+    %320:sreg_32 = PHI %384, %bb.23, %383, %bb.22
+    %321:sreg_32 = PHI %385, %bb.23, %380, %bb.22
+    %322:sreg_32 = PHI %386, %bb.23, %378, %bb.22
+    %323:sreg_32 = PHI %387, %bb.23, %376, %bb.22
+    %324:vgpr_32 = PHI %388, %bb.23, %502, %bb.22
+    %325:vgpr_32 = PHI %390, %bb.23, %400, %bb.22
+    %326:vgpr_32 = PHI %391, %bb.23, %56, %bb.22
+    %327:vgpr_32 = PHI %392, %bb.23, %373, %bb.22
+    %328:vgpr_32 = PHI %392, %bb.23, %56, %bb.22
+    %329:vgpr_32 = PHI %393, %bb.23, %373, %bb.22
+    %330:vgpr_32 = PHI %395, %bb.23, %55, %bb.22
+    %331:vgpr_32 = PHI %396, %bb.23, %56, %bb.22
+    %332:vgpr_32 = PHI %397, %bb.23, %57, %bb.22
+    %333:vgpr_32 = PHI %398, %bb.23, %58, %bb.22
+    %334:vgpr_32 = PHI %399, %bb.23, %59, %bb.22
+    SI_END_CF killed %402, implicit-def dead $exec, implicit-def dead $scc, implicit $exec
+    %335:sreg_32 = S_AND_B32 killed %323, $exec_lo, implicit-def dead $scc
+    %336:sreg_32 = COPY killed %335
+    %337:sreg_32 = S_ANDN2_B32 killed %225, $exec_lo, implicit-def dead $scc
+    %338:sreg_32 = S_AND_B32 killed %322, $exec_lo, implicit-def dead $scc
+    %339:sreg_32 = S_OR_B32 killed %337, killed %338, implicit-def dead $scc
+    %340:sreg_32 = S_ANDN2_B32 killed %224, $exec_lo, implicit-def dead $scc
+    %341:sreg_32 = S_AND_B32 killed %321, $exec_lo, implicit-def dead $scc
+    %342:sreg_32 = S_OR_B32 killed %340, killed %341, implicit-def dead $scc
+    %343:sreg_32 = S_ORN2_B32 killed %320, $exec_lo, implicit-def dead $scc
+    %344:sreg_32 = S_ANDN2_B32 killed %222, $exec_lo, implicit-def dead $scc
+    %345:sreg_32 = COPY killed %344
+    S_BRANCH %bb.17
+  
+  bb.20:
+    successors: %bb.33(0x80000000)
+  
+    %346:vgpr_32 = V_ADD_U32_e64 1, %55, 0, implicit $exec
+    %347:sreg_32 = V_CMP_GE_U32_e64 %346, %3, implicit $exec
+    %348:sreg_32 = S_ANDN2_B32 killed %292, $exec_lo, implicit-def dead $scc
+    %349:sreg_32 = COPY killed %348
+    %350:sreg_32 = S_ANDN2_B32 killed %291, $exec_lo, implicit-def dead $scc
+    %351:sreg_32 = COPY killed %350
+    %352:sreg_32 = S_ANDN2_B32 killed %290, $exec_lo, implicit-def dead $scc
+    %353:sreg_32 = COPY killed %352
+    %354:sreg_32 = S_ANDN2_B32 killed %289, $exec_lo, implicit-def dead $scc
+    %355:sreg_32 = S_AND_B32 killed %347, $exec_lo, implicit-def dead $scc
+    %356:sreg_32 = S_OR_B32 killed %354, killed %355, implicit-def dead $scc
+    S_BRANCH %bb.33
+  
+  bb.21:
+    successors: %bb.23(0x80000000)
+  
+    %357:sreg_32 = PHI %318, %bb.18, %406, %bb.24
+    %358:sreg_32 = PHI %318, %bb.18, %405, %bb.24
+    %359:vgpr_32 = PHI undef %360:vgpr_32, %bb.18, %58, %bb.24
+    %361:vgpr_32 = PHI undef %360:vgpr_32, %bb.18, %314, %bb.24
+    %362:vgpr_32 = PHI undef %360:vgpr_32, %bb.18, %403, %bb.24
+    %363:vgpr_32 = PHI undef %360:vgpr_32, %bb.18, %57, %bb.24
+    %364:vgpr_32 = PHI undef %365:vgpr_32, %bb.18, %403, %bb.24
+    SI_END_CF killed %319, implicit-def dead $exec, implicit-def dead $scc, implicit $exec
+    %366:sreg_32 = S_AND_B32 killed %358, $exec_lo, implicit-def dead $scc
+    %367:sreg_32 = COPY killed %366
+    %368:sreg_32 = S_ANDN2_B32 %225, $exec_lo, implicit-def dead $scc
+    %369:sreg_32 = COPY killed %368
+    %370:sreg_32 = S_ANDN2_B32 %224, $exec_lo, implicit-def dead $scc
+    %371:sreg_32 = COPY killed %370
+    %372:sreg_32 = S_ORN2_B32 killed %357, $exec_lo, implicit-def dead $scc
+    S_BRANCH %bb.23
+  
+  bb.22:
+    successors: %bb.19(0x80000000)
+  
+    %373:vgpr_32 = V_ADD_U32_e64 1, %56, 0, implicit $exec
+    %374:sreg_32 = V_CMP_GE_U32_e64 %373, %2, implicit $exec
+    %375:sreg_32 = S_ANDN2_B32 killed %387, $exec_lo, implicit-def dead $scc
+    %376:sreg_32 = COPY killed %375
+    %377:sreg_32 = S_ANDN2_B32 killed %386, $exec_lo, implicit-def dead $scc
+    %378:sreg_32 = COPY killed %377
+    %379:sreg_32 = S_ANDN2_B32 killed %385, $exec_lo, implicit-def dead $scc
+    %380:sreg_32 = COPY killed %379
+    %381:sreg_32 = S_ANDN2_B32 killed %384, $exec_lo, implicit-def dead $scc
+    %382:sreg_32 = S_AND_B32 killed %374, $exec_lo, implicit-def dead $scc
+    %383:sreg_32 = S_OR_B32 killed %381, killed %382, implicit-def dead $scc
+    S_BRANCH %bb.19
+  
+  bb.23:
+    successors: %bb.22(0x40000000), %bb.19(0x40000000)
+  
+    %384:sreg_32 = PHI %276, %bb.16, %372, %bb.21
+    %385:sreg_32 = PHI %224, %bb.16, %371, %bb.21
+    %386:sreg_32 = PHI %225, %bb.16, %369, %bb.21
+    %387:sreg_32 = PHI %286, %bb.16, %367, %bb.21
+    %388:vgpr_32 = PHI undef %389:vgpr_32, %bb.16, %359, %bb.21
+    %390:vgpr_32 = PHI undef %389:vgpr_32, %bb.16, %361, %bb.21
+    %391:vgpr_32 = PHI undef %389:vgpr_32, %bb.16, %362, %bb.21
+    %392:vgpr_32 = PHI undef %389:vgpr_32, %bb.16, %363, %bb.21
+    %393:vgpr_32 = PHI undef %394:vgpr_32, %bb.16, %364, %bb.21
+    %395:vgpr_32 = PHI undef %389:vgpr_32, %bb.16, %55, %bb.21
+    %396:vgpr_32 = PHI undef %389:vgpr_32, %bb.16, %56, %bb.21
+    %397:vgpr_32 = PHI undef %389:vgpr_32, %bb.16, %57, %bb.21
+    %398:vgpr_32 = PHI undef %389:vgpr_32, %bb.16, %58, %bb.21
+    %399:vgpr_32 = PHI undef %389:vgpr_32, %bb.16, %59, %bb.21
+    %400:vgpr_32 = PHI %285, %bb.16, undef %401:vgpr_32, %bb.21
+    %402:sreg_32 = SI_ELSE killed %287, %bb.19, implicit-def dead $exec, implicit-def dead $scc, implicit $exec
+    S_BRANCH %bb.22
+  
+  bb.24:
+    successors: %bb.21(0x80000000)
+  
+    %403:vgpr_32 = V_ADD_U32_e64 1, %57, 0, implicit $exec
+    %404:sreg_32 = V_CMP_GE_U32_e64 %403, %1, implicit $exec
+    %405:sreg_32 = S_XOR_B32 $exec_lo, -1, implicit-def dead $scc
+    %406:sreg_32 = S_ORN2_B32 killed %404, $exec_lo, implicit-def dead $scc
+    S_BRANCH %bb.21
+  
+  bb.25:
+    successors: %bb.26(0x40000000), %bb.32(0x40000000)
+  
+    %407:vgpr_32 = PHI undef %408:vgpr_32, %bb.34, %456, %bb.31
+    %409:vreg_64 = PHI %21, %bb.34, undef %410:vreg_64, %bb.31
+    %411:vreg_64 = PHI %20, %bb.34, undef %412:vreg_64, %bb.31
+    %413:sreg_32 = SI_ELSE killed %490, %bb.32, implicit-def dead $exec, implicit-def dead $scc, implicit $exec
+    S_BRANCH %bb.26
+  
+  bb.26:
+    successors: %bb.32(0x80000000)
+  
+    %414:vgpr_32 = GLOBAL_LOAD_UBYTE %409, 0, 0, implicit $exec :: (load (s8) from %ir.p3, addrspace 1)
+    %415:vgpr_32 = GLOBAL_LOAD_UBYTE %409, 1, 0, implicit $exec :: (load (s8) from %ir.p3 + 1, addrspace 1)
+    %416:vgpr_32 = V_LSHL_OR_B32_e64 killed %415, 8, killed %414, implicit $exec
+    %417:vgpr_32 = GLOBAL_LOAD_UBYTE %409, 2, 0, implicit $exec :: (load (s8) from %ir.p3 + 2, addrspace 1)
+    %418:vgpr_32 = GLOBAL_LOAD_UBYTE killed %409, 3, 0, implicit $exec :: (load (s8) from %ir.p3 + 3, addrspace 1)
+    %419:vgpr_32 = V_LSHL_OR_B32_e64 killed %418, 8, killed %417, implicit $exec
+    %420:vgpr_32 = V_LSHL_OR_B32_e64 killed %419, 16, killed %416, implicit $exec
+    %421:vgpr_32 = V_ADD3_U32_e64 killed %420, killed %106, killed %109, implicit $exec
+    GLOBAL_STORE_BYTE_D16_HI %411, %421, 2, 0, implicit $exec :: (store (s8) into %ir.p4 + 2, addrspace 1)
+    GLOBAL_STORE_BYTE %411, %421, 0, 0, implicit $exec :: (store (s8) into %ir.p4, addrspace 1)
+    %422:vgpr_32 = V_LSHRREV_B32_e64 24, %421, implicit $exec
+    GLOBAL_STORE_BYTE %411, killed %422, 3, 0, implicit $exec :: (store (s8) into %ir.p4 + 3, addrspace 1)
+    %423:vgpr_32 = V_LSHRREV_B32_e64 8, %421, implicit $exec
+    GLOBAL_STORE_BYTE killed %411, killed %423, 1, 0, implicit $exec :: (store (s8) into %ir.p4 + 1, addrspace 1)
+    S_BRANCH %bb.32
+  
+  bb.27:
+    successors: %bb.28(0x40000000), %bb.31(0x40000000)
+  
+    %424:vgpr_32 = PHI undef %425:vgpr_32, %bb.35, %455, %bb.30
+    %426:vreg_64 = PHI %20, %bb.35, undef %427:vreg_64, %bb.30
+    %428:vreg_64 = PHI %21, %bb.35, undef %429:vreg_64, %bb.30
+    %430:sreg_32 = SI_ELSE killed %491, %bb.31, implicit-def dead $exec, implicit-def dead $scc, implicit $exec
+    S_BRANCH %bb.28
+  
+  bb.28:
+    successors: %bb.31(0x80000000)
+  
+    %431:vgpr_32 = GLOBAL_LOAD_UBYTE %426, 0, 0, implicit $exec :: (load (s8) from %ir.p4, addrspace 1)
+    %432:vgpr_32 = GLOBAL_LOAD_UBYTE %426, 1, 0, implicit $exec :: (load (s8) from %ir.p4 + 1, addrspace 1)
+    %433:vgpr_32 = V_LSHL_OR_B32_e64 killed %432, 8, killed %431, implicit $exec
+    %434:vgpr_32 = GLOBAL_LOAD_UBYTE %426, 2, 0, implicit $exec :: (load (s8) from %ir.p4 + 2, addrspace 1)
+    %435:vgpr_32 = GLOBAL_LOAD_UBYTE killed %426, 3, 0, implicit $exec :: (load (s8) from %ir.p4 + 3, addrspace 1)
+    %436:vgpr_32 = V_LSHL_OR_B32_e64 killed %435, 8, killed %434, implicit $exec
+    %437:vgpr_32 = V_LSHL_OR_B32_e64 killed %436, 16, killed %433, implicit $exec
+    %438:vreg_64 = REG_SEQUENCE killed %111, %subreg.sub0, undef %439:vgpr_32, %subreg.sub1
+    %440:vreg_64, $sgpr_null = V_MAD_U64_U32_e64 killed %437, killed %107, killed %438, 0, implicit $exec
+    %441:vgpr_32 = COPY %440.sub0
+    GLOBAL_STORE_BYTE_D16_HI %428, %440.sub0, 2, 0, implicit $exec :: (store (s8) into %ir.p3 + 2, addrspace 1)
+    GLOBAL_STORE_BYTE %428, %440.sub0, 0, 0, implicit $exec :: (store (s8) into %ir.p3, addrspace 1)
+    %442:vgpr_32 = V_LSHRREV_B32_e64 24, %440.sub0, implicit $exec
+    GLOBAL_STORE_BYTE %428, killed %442, 3, 0, implicit $exec :: (store (s8) into %ir.p3 + 3, addrspace 1)
+    %443:vgpr_32 = V_LSHRREV_B32_e64 8, killed %440.sub0, implicit $exec
+    GLOBAL_STORE_BYTE killed %428, killed %443, 1, 0, implicit $exec :: (store (s8) into %ir.p3 + 1, addrspace 1)
+    S_BRANCH %bb.31
+  
+  bb.29:
+    successors: %bb.30(0x80000000)
+  
+    %444:vgpr_32 = GLOBAL_LOAD_UBYTE %19, 0, 0, implicit $exec :: (load (s8) from %ir.p5, addrspace 1)
+    %445:vgpr_32 = GLOBAL_LOAD_UBYTE %19, 1, 0, implicit $exec :: (load (s8) from %ir.p5 + 1, addrspace 1)
+    %446:vgpr_32 = V_LSHL_OR_B32_e64 killed %445, 8, killed %444, implicit $exec
+    %447:vgpr_32 = GLOBAL_LOAD_UBYTE %19, 2, 0, implicit $exec :: (load (s8) from %ir.p5 + 2, addrspace 1)
+    %448:vgpr_32 = GLOBAL_LOAD_UBYTE killed %19, 3, 0, implicit $exec :: (load (s8) from %ir.p5 + 3, addrspace 1)
+    %449:vgpr_32 = V_LSHL_OR_B32_e64 killed %448, 8, killed %447, implicit $exec
+    %450:vgpr_32 = V_LSHL_OR_B32_e64 killed %449, 16, killed %446, implicit $exec
+    %451:vgpr_32 = V_SUB_U32_e64 killed %450, killed %108, 0, implicit $exec
+    %452:vgpr_32 = V_ADD_U32_e64 killed %451, killed %110, 0, implicit $exec
+    GLOBAL_STORE_BYTE_D16_HI %22, %452, 2, 0, implicit $exec :: (store (s8) into %ir.p2 + 2, addrspace 1)
+    GLOBAL_STORE_BYTE %22, %452, 0, 0, implicit $exec :: (store (s8) into %ir.p2, addrspace 1)
+    %453:vgpr_32 = V_LSHRREV_B32_e64 24, %452, implicit $exec
+    GLOBAL_STORE_BYTE %22, killed %453, 3, 0, implicit $exec :: (store (s8) into %ir.p2 + 3, addrspace 1)
+    %454:vgpr_32 = V_LSHRREV_B32_e64 8, %452, implicit $exec
+    GLOBAL_STORE_BYTE killed %22, killed %454, 1, 0, implicit $exec :: (store (s8) into %ir.p2 + 1, addrspace 1)
+  
+  bb.30:
+    successors: %bb.27(0x80000000)
+  
+    %455:vgpr_32 = PHI %104, %bb.36, %452, %bb.29
+    SI_END_CF killed %492, implicit-def dead $exec, implicit-def dead $scc, implicit $exec
+    S_BRANCH %bb.27
+  
+  bb.31:
+    successors: %bb.25(0x80000000)
+  
+    %456:vgpr_32 = PHI %424, %bb.27, %441, %bb.28
+    SI_END_CF killed %430, implicit-def dead $exec, implicit-def dead $scc, implicit $exec
+    S_BRANCH %bb.25
+  
+  bb.32:
+    %457:vgpr_32 = PHI %407, %bb.25, %421, %bb.26
+    SI_END_CF killed %413, implicit-def dead $exec, implicit-def dead $scc, implicit $exec
+    %458:vgpr_32 = V_ADD3_U32_e64 killed %30, killed %457, 100, implicit $exec
+    %459:sreg_32_xm0 = V_READFIRSTLANE_B32 killed %458, implicit $exec
+    $sgpr0 = COPY killed %459
+    SI_RETURN_TO_EPILOG killed $sgpr0
+  
+  bb.33:
+    successors: %bb.3(0x80000000)
+  
+    %460:sreg_32 = PHI %289, %bb.17, %356, %bb.20
+    %461:sreg_32 = PHI %290, %bb.17, %353, %bb.20
+    %462:sreg_32 = PHI %291, %bb.17, %351, %bb.20
+    %463:sreg_32 = PHI %292, %bb.17, %349, %bb.20
+    %464:vgpr_32 = PHI %293, %bb.17, %227, %bb.20
+    %465:vgpr_32 = PHI %295, %bb.17, %226, %bb.20
+    %466:vgpr_32 = PHI %296, %bb.17, %55, %bb.20
+    %467:vgpr_32 = PHI %297, %bb.17, %55, %bb.20
+    %468:vgpr_32 = PHI %298, %bb.17, %346, %bb.20
+    %469:vgpr_32 = PHI %299, %bb.17, %346, %bb.20
+    %470:vgpr_32 = PHI %301, %bb.17, %55, %bb.20
+    %471:vgpr_32 = PHI %302, %bb.17, %56, %bb.20
+    %472:vgpr_32 = PHI %303, %bb.17, %57, %bb.20
+    %473:vgpr_32 = PHI %304, %bb.17, %58, %bb.20
+    %474:vgpr_32 = PHI %305, %bb.17, %59, %bb.20
+    %475:vgpr_32 = PHI %234, %bb.17, %227, %bb.20
+    SI_END_CF killed %306, implicit-def dead $exec, implicit-def dead $scc, implicit $exec
+    %476:sreg_32 = S_ANDN2_B32 killed %75, $exec_lo, implicit-def dead $scc
+    %477:sreg_32 = S_AND_B32 killed %463, $exec_lo, implicit-def dead $scc
+    %478:sreg_32 = S_OR_B32 killed %476, killed %477, implicit-def dead $scc
+    %479:sreg_32 = S_ANDN2_B32 killed %77, $exec_lo, implicit-def dead $scc
+    %480:sreg_32 = S_AND_B32 killed %462, $exec_lo, implicit-def dead $scc
+    %481:sreg_32 = S_OR_B32 killed %479, killed %480, implicit-def dead $scc
+    %482:sreg_32 = S_ANDN2_B32 killed %79, $exec_lo, implicit-def dead $scc
+    %483:sreg_32 = S_AND_B32 killed %461, $exec_lo, implicit-def dead $scc
+    %484:sreg_32 = S_OR_B32 killed %482, killed %483, implicit-def dead $scc
+    %485:sreg_32 = S_ANDN2_B32 killed %80, $exec_lo, implicit-def dead $scc
+    %486:sreg_32 = S_AND_B32 killed %460, $exec_lo, implicit-def dead $scc
+    %487:sreg_32 = S_OR_B32 killed %485, killed %486, implicit-def dead $scc
+    S_BRANCH %bb.3
+  
+  bb.34:
+    successors: %bb.35(0x40000000), %bb.25(0x40000000)
+  
+    SI_END_CF killed %112, implicit-def dead $exec, implicit-def dead $scc, implicit $exec
+    %488:sreg_32 = S_XOR_B32 killed %121, -1, implicit-def dead $scc
+    %489:sreg_32 = S_XOR_B32 killed %118, -1, implicit-def dead $scc
+    %490:sreg_32 = SI_IF killed %488, %bb.25, implicit-def dead $exec, implicit-def dead $scc, implicit $exec
+    S_BRANCH %bb.35
+  
+  bb.35:
+    successors: %bb.36(0x40000000), %bb.27(0x40000000)
+  
+    %491:sreg_32 = SI_IF killed %489, %bb.27, implicit-def dead $exec, implicit-def dead $scc, implicit $exec
+    S_BRANCH %bb.36
+  
+  bb.36:
+    successors: %bb.29(0x40000000), %bb.30(0x40000000)
+  
+    %492:sreg_32 = SI_IF killed %115, %bb.30, implicit-def dead $exec, implicit-def dead $scc, implicit $exec
+    S_BRANCH %bb.29
+  
+  bb.37:
+    successors: %bb.38(0x04000000), %bb.4(0x7c000000)
+  
+    %493:sreg_32 = PHI %172, %bb.8, %167, %bb.6
+    %494:sreg_32 = PHI %173, %bb.8, %164, %bb.6
+    %495:vgpr_32 = PHI %175, %bb.8, %142, %bb.6
+    %496:vgpr_32 = PHI %177, %bb.8, %162, %bb.6
+    %497:vgpr_32 = PHI %178, %bb.8, %125, %bb.6
+    %498:vgpr_32 = PHI %179, %bb.8, %143, %bb.6
+    %499:vgpr_32 = PHI %180, %bb.8, %125, %bb.6
+    %500:vgpr_32 = PHI %181, %bb.8, %126, %bb.6
+    %501:vgpr_32 = PHI %182, %bb.8, %127, %bb.6
+    %502:vgpr_32 = PHI %183, %bb.8, %128, %bb.6
+    SI_END_CF killed %185, implicit-def dead $exec, implicit-def dead $scc, implicit $exec
+    %503:sreg_32 = S_XOR_B32 killed %494, -1, implicit-def dead $scc
+    %504:sreg_32 = SI_IF_BREAK killed %493, killed %124, implicit-def dead $scc
+    %505:sreg_32 = S_ANDN2_B32 killed %122, $exec_lo, implicit-def dead $scc
+    %506:sreg_32 = S_AND_B32 killed %503, $exec_lo, implicit-def dead $scc
+    %507:sreg_32 = S_OR_B32 killed %505, killed %506, implicit-def dead $scc
+    SI_LOOP %504, %bb.4, implicit-def dead $exec, implicit-def dead $scc, implicit $exec
+    S_BRANCH %bb.38
+  
+  bb.38:
+    successors: %bb.14(0x40000000), %bb.10(0x40000000)
+  
+    SI_END_CF killed %504, implicit-def dead $exec, implicit-def dead $scc, implicit $exec
+    %508:sreg_32 = S_MOV_B32 0
+    %509:sreg_32 = SI_IF killed %507, %bb.10, implicit-def dead $exec, implicit-def dead $scc, implicit $exec
+    S_BRANCH %bb.14
+...
+---
